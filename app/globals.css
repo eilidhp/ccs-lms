@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-purple: #9F3392;
+  --color-brand-yellow: #FFCB0D;
+  --color-brand-darkPurple: #551B4E;
+  --color-brand-lightYellow: #FFE171;
+  --color-brand-darkGrey: #2B2B2B;
+  --color-brand-success: #22c55e;
+  
+  --font-sans: var(--font-lato), ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  background-color: #f9fafb;
+  color: var(--color-brand-darkGrey);
+}
