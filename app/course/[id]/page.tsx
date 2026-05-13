@@ -31,7 +31,7 @@ export default function CoursePlayer() {
       const { data: c } = await supabase.from('courses').select('*').eq('id', params.id).single();
       if (c) setCourse(c);
 
-      // GUARANTEED MATH FIX: Ensure it correctly selects existing progress!
+      // GUARANTEED PROGRESS FETCH
       const { data: prog } = await supabase.from('course_progress').select('*').match({ user_email: email, course_id: params.id }).maybeSingle();
       if (prog) setCompletedChapters(prog.completed_chapters || []);
 
@@ -59,6 +59,9 @@ export default function CoursePlayer() {
   const maxAllowedIndex = isAdmin ? 999 : highestCompleted + 1;
   const isCurrentlyCompleted = completedChapters.includes(activeChapterIndex);
 
+  const uniqueCompletedCount = Array.from(new Set(completedChapters)).length;
+  const progressPercent = Math.min(100, Math.round((uniqueCompletedCount / (course.chapters?.length || 1)) * 100));
+
   const handleSaveNote = async () => {
     setIsSavingNote(true);
     await supabase.from('user_notes').upsert({ user_email: userEmail, course_id: course.id, chapter_index: activeChapterIndex, course_title: course.title, chapter_title: currentChapter.title, content: currentNote }, { onConflict: 'user_email,course_id,chapter_index' });
@@ -69,7 +72,7 @@ export default function CoursePlayer() {
     const newCompleted = Array.from(new Set([...completedChapters, activeChapterIndex]));
     setCompletedChapters(newCompleted);
     
-    // GUARANTEED MATH FIX: Use a specific ID update if it exists so it doesn't fail silently!
+    // GUARANTEED PROGRESS UPDATE (Using specific ID to prevent database errors)
     const { data: existing } = await supabase.from('course_progress').select('id').match({ user_email: userEmail, course_id: course.id }).maybeSingle();
     
     if (existing) {
@@ -92,7 +95,6 @@ export default function CoursePlayer() {
     switch (currentChapter.type) {
       case 'video': return <div className="w-full aspect-video bg-black rounded-xl overflow-hidden shadow-lg border border-gray-200 mb-8"><video controls className="w-full h-full object-contain" src={currentChapter.fileUrl} controlsList="nodownload">Error</video></div>;
       case 'pdf': return <div className="w-full h-[600px] rounded-xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 mb-8"><iframe src={`${currentChapter.fileUrl}#toolbar=0`} className="w-full h-full" /></div>;
-      // FULL SCREEN SCORM
       case 'scorm': return <div className="absolute inset-0 w-full h-full flex flex-col"><div className="w-full h-8 bg-brand-darkPurple text-center text-[10px] font-bold text-brand-yellow uppercase tracking-widest flex items-center justify-center z-10 shrink-0 pointer-events-none">📦 SCORM Module Running</div><iframe src={currentChapter.fileUrl} className="w-full flex-1 border-0 bg-white" allowFullScreen /></div>;
       default: return null;
     }
@@ -101,15 +103,19 @@ export default function CoursePlayer() {
   return (
     <div className="flex h-screen bg-white text-brand-darkGrey overflow-hidden">
       <aside className={`${sidebarOpen ? "w-80" : "w-0"} transition-all duration-300 bg-gray-50 border-r border-gray-200 flex flex-col shrink-0 overflow-hidden z-20`}>
-        <div className="p-6 bg-white border-b border-gray-200"><Link href="/dashboard" className="text-sm text-brand-purple font-bold mb-6 block hover:text-brand-darkPurple">&larr; Back to Dashboard</Link><h2 className="font-black text-lg text-brand-darkPurple mb-2 line-clamp-3">{course.title}</h2><span className="text-xs font-bold text-gray-400 uppercase tracking-wider">{course.chapters?.length || 0} Modules</span></div>
+        <div className="p-6 bg-white border-b border-gray-200">
+          <Link href="/dashboard" className="text-sm text-brand-purple font-bold mb-4 block hover:text-brand-darkPurple">&larr; Back to Dashboard</Link>
+          <h2 className="font-black text-lg text-brand-darkPurple mb-2 line-clamp-3">{course.title}</h2>
+          <div className="flex justify-between text-xs font-bold text-gray-400 uppercase tracking-wider mb-2"><span>{course.chapters?.length || 0} Modules</span><span className="text-brand-purple">{progressPercent}%</span></div>
+          <div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-brand-purple h-1.5 rounded-full transition-all" style={{ width: `${progressPercent}%` }}></div></div>
+        </div>
         <div className="p-4 flex-1 overflow-y-auto">
            <ul className="space-y-2 mt-2">
              {course.chapters?.map((chapter: any, index: number) => {
                const isLocked = index > maxAllowedIndex;
                const isCompleted = completedChapters.includes(index);
-               // SUB-CHAPTER INDENTATION
+               // NEW SUB-CHAPTER INDENTATION UI
                const indentClass = chapter.isSubChapter ? "ml-6 text-sm border-l-4 border-l-brand-purple/30 bg-white shadow-sm" : "";
-               
                return (
                  <li key={chapter.id || index} onClick={() => !isLocked && setActiveChapterIndex(index)} className={`p-3 font-bold rounded-lg border transition-all flex items-center gap-3 ${indentClass} ${isLocked ? 'opacity-50 cursor-not-allowed bg-gray-100 border-gray-200' : index === activeChapterIndex ? "bg-brand-purple/10 text-brand-purple border-brand-purple shadow-sm cursor-pointer" : "text-gray-500 hover:bg-gray-200 border-transparent cursor-pointer"}`}>
                    <span className="text-xl w-6 text-center">{isLocked ? '🔒' : isCompleted ? '✅' : chapter.isSubChapter ? '↳' : chapter.type === 'video' ? '🎥' : chapter.type === 'scorm' ? '📦' : chapter.type === 'quiz' ? '❓' : chapter.type === 'text' ? '📝' : '📄'}</span>
@@ -124,9 +130,9 @@ export default function CoursePlayer() {
       <main className="flex-1 flex flex-col min-w-0 bg-gray-50/30 overflow-hidden relative">
         <header className="h-16 border-b border-gray-200 flex items-center justify-between px-6 bg-white shrink-0 shadow-sm z-10"><button onClick={() => setSidebarOpen(!sidebarOpen)} className="text-brand-darkGrey font-bold text-sm hover:text-brand-purple">☰ {sidebarOpen ? "Minimise Menu" : "Table of Contents"}</button></header>
         
-        {/* CONDITIONAL SCORM FULL SCREEN */}
+        {/* NEW FULL SCREEN SCORM WRAPPER */}
         {isScorm ? (
-          <div className="flex-1 w-full h-full bg-white relative">
+          <div className="flex-1 w-full h-full bg-white relative flex flex-col">
             {renderMediaContent()}
           </div>
         ) : (
@@ -151,7 +157,6 @@ export default function CoursePlayer() {
           </div>
         )}
 
-        {/* BOTTOM ACTION BAR */}
         {currentChapter.type !== 'quiz' && !isCurrentlyCompleted && (
           <div className="bg-white border-t border-gray-200 p-6 px-8 lg:px-12 flex justify-end shrink-0 z-10 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] relative z-20">
             <button onClick={() => setShowQuestion(true)} className="bg-brand-purple text-white px-8 py-3.5 rounded-full font-bold text-lg hover:-translate-y-1 transition border-2 border-brand-darkPurple hover:bg-brand-darkPurple cursor-pointer shadow-md">Complete Module &rarr;</button>

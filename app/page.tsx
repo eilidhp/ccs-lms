@@ -11,10 +11,10 @@ export default function LoginScreen() {
   const [isLogin, setIsLogin] = useState(true);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
-  const [successMsg, setSuccessMsg] = useState(""); // NEW SUCCESS STATE!
+  const [successMsg, setSuccessMsg] = useState("");
 
   useEffect(() => {
-    // Catch and hide false verification errors from the URL hash cleanly
+    // Hide false verification errors from the URL cleanly
     if (typeof window !== 'undefined' && window.location.hash.includes('error=')) {
       window.history.replaceState(null, '', window.location.pathname);
     }
@@ -46,16 +46,31 @@ export default function LoginScreen() {
       if (!fullName) { setErrorMsg("Please provide your full name."); setLoading(false); return; }
       const res = await supabase.auth.signUp({ email, password });
       error = res.error;
+      
+      // If sign up works, check if it auto-logged them in (Email Confirm is OFF)
+      // or if it requires verification (Email Confirm is ON)
       if (!error) {
         await supabase.from('profiles').upsert({ email: email.toLowerCase(), full_name: fullName, last_login: new Date().toISOString() });
-        // SHOW THE EXACT SUCCESS MESSAGE YOU REQUESTED!
-        setSuccessMsg("Thank you for signing up. You should expect an email from 'Supabase Auth', you simply need to click on the URL within the email to verify your email.");
-        setLoading(false);
+        
+        if (res.data.session) {
+           router.push("/dashboard");
+        } else {
+           // EXACT WORDING UPDATED HERE
+           setSuccessMsg("You should shortly receive an email asking to verify your email address. Simply follow the URL within the email and then return to the Log In page.");
+           setLoading(false);
+        }
         return;
       }
     }
 
-    if (error) { setErrorMsg(error.message); setLoading(false); }
+    if (error) { 
+      if (error.message.includes("Error sending confirmation Email") || error.message.includes("rate limit")) {
+        setErrorMsg("Error sending confirmation Email: Please check your Supabase SMTP settings, or wait a few minutes if you've hit the rate limit.");
+      } else {
+        setErrorMsg(error.message); 
+      }
+      setLoading(false); 
+    }
   };
 
   return (

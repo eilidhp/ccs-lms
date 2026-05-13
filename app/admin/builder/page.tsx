@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
-import JSZip from "jszip"; // OUR NEW BROWSER UNZIPPER!
+import JSZip from "jszip"; 
 
 const getMimeType = (filename: string) => {
   const ext = filename.split('.').pop()?.toLowerCase();
@@ -25,12 +25,9 @@ const getMimeType = (filename: string) => {
 export default function InstructorPortal() {
   const [activeTab, setActiveTab] = useState("builder");
   const [isSaving, setIsSaving] = useState(false);
-  
   const [courseTitle, setCourseTitle] = useState("");
   const [thumbnailUrl, setThumbnailUrl] = useState("");
   const [isUploadingThumb, setIsUploadingThumb] = useState(false);
-  
-  // NEW: Added isSubChapter property and uploadStatus message tracking
   const [chapters, setChapters] = useState<any[]>([{ id: 1, title: "", isSubChapter: false, textContent: "", type: "text", fileUrl: "", fileName: "", isUploading: false, uploadStatus: "", questions: [] }]);
   
   const [existingCourses, setExistingCourses] = useState<any[]>([]);
@@ -83,25 +80,24 @@ export default function InstructorPortal() {
     
     try {
       if (newChapters[index].type === 'scorm') {
-        // 🧠 NEW CLOUD SCORM EXTRACTION ENGINE (Bypasses Vercel Limit)
         const zip = new JSZip();
         const loadedZip = await zip.loadAsync(file);
         const uniqueId = `scorm-${Date.now()}`;
         
         const fileNames = Object.keys(loadedZip.files);
-        const validNames = fileNames.filter(f => !f.includes("__MACOSX") && !f.startsWith("."));
-        const validFiles = validNames.filter(f => !loadedZip.files[f].dir);
+        // Exclude Mac hidden files and directories
+        const validFiles = fileNames.filter(f => !f.includes("__MACOSX") && !f.startsWith(".") && !loadedZip.files[f].dir);
         
+        // Match the SCORM starting file accurately
         const lowerNames = validFiles.map(f => f.toLowerCase());
-        let mainFile = "index.html";
-        if (lowerNames.includes('story.html')) mainFile = validFiles[lowerNames.indexOf('story.html')];
-        else if (lowerNames.includes('scormdriver/indexapi.html')) mainFile = validFiles[lowerNames.indexOf('scormdriver/indexapi.html')];
-        else if (lowerNames.includes('index_lms.html')) mainFile = validFiles[lowerNames.indexOf('index_lms.html')];
-        else if (lowerNames.includes('index.html')) mainFile = validFiles[lowerNames.indexOf('index.html')];
-        else mainFile = validFiles.find(f => f.toLowerCase().endsWith('.html')) || validFiles[0];
+        let mainFile = validFiles.find(f => f.toLowerCase().endsWith('story.html')) ||
+                       validFiles.find(f => f.toLowerCase().endsWith('scormdriver/indexapi.html')) ||
+                       validFiles.find(f => f.toLowerCase().endsWith('index_lms.html')) ||
+                       validFiles.find(f => f.toLowerCase().endsWith('index.html')) ||
+                       validFiles.find(f => f.toLowerCase().endsWith('.html')) || 
+                       validFiles[0];
 
-        // Upload in secure batches of 15 to keep the browser fast!
-        const batchSize = 15;
+        const batchSize = 10;
         let uploadedCount = 0;
         for (let i = 0; i < validFiles.length; i += batchSize) {
           const batch = validFiles.slice(i, i + batchSize);
@@ -115,16 +111,17 @@ export default function InstructorPortal() {
           setChapters(progChapters);
         }
 
-        const { data: urlData } = supabase.storage.from('course-content').getPublicUrl(`${uniqueId}/${mainFile}`);
+        const publicUrlData = supabase.storage.from('course-content').getPublicUrl(`${uniqueId}/${mainFile}`);
+        const finalUrl = encodeURI(publicUrlData.data.publicUrl);
+
         const finalChapters = [...chapters]; 
-        finalChapters[index].fileUrl = urlData.publicUrl; 
+        finalChapters[index].fileUrl = finalUrl; 
         finalChapters[index].isUploading = false; 
         finalChapters[index].uploadStatus = "";
         setChapters(finalChapters); 
         return;
       }
 
-      // Normal Media Upload
       const safeName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
       await supabase.storage.from('course-content').upload(safeName, file);
       const { data: urlData } = supabase.storage.from('course-content').getPublicUrl(safeName);
@@ -196,8 +193,7 @@ export default function InstructorPortal() {
                     
                     {/* NEW: SUB-CHAPTER CHECKBOX */}
                     <label className="flex items-center gap-2 cursor-pointer bg-white px-3 py-2 rounded-lg border border-gray-300 text-sm font-bold text-gray-600 hover:border-brand-purple">
-                      <input type="checkbox" checked={chapter.isSubChapter || false} onChange={(e) => { const n = [...chapters]; n[i].isSubChapter = e.target.checked; setChapters(n); }} className="w-4 h-4 accent-brand-purple cursor-pointer" />
-                      Is Sub-Chapter
+                      <input type="checkbox" checked={chapter.isSubChapter || false} onChange={(e) => { const n = [...chapters]; n[i].isSubChapter = e.target.checked; setChapters(n); }} className="w-4 h-4 accent-brand-purple cursor-pointer" /> Is Sub-Chapter
                     </label>
 
                     <button onClick={() => removeChapter(chapter.id)} className="text-red-400 font-bold px-2 text-2xl hover:text-red-600">&times;</button></div><div className="ml-11"><textarea value={chapter.textContent || ""} onChange={(e) => { const n = [...chapters]; n[i].textContent = e.target.value; setChapters(n); }} placeholder={chapter.type === 'text' ? "Type your course content here..." : "Add context, instructions, or body text..."} className="w-full border border-gray-300 rounded-lg p-3 text-sm min-h-[100px] outline-none focus:border-brand-purple bg-white resize-y" /></div>{chapter.type === 'quiz' && (<div className="ml-11 bg-brand-lightYellow/10 p-5 rounded-lg border-2 border-brand-yellow/50"><div className="flex justify-between items-center mb-4"><h4 className="font-bold text-brand-darkPurple text-sm uppercase tracking-wider">📝 Questions</h4><button onClick={() => addQuizQuestion(i)} className="text-xs bg-brand-yellow text-brand-darkPurple px-3 py-1.5 rounded font-bold shadow-sm hover:bg-brand-lightYellow">+ Add Q</button></div>{chapter.questions?.map((q: any, qIndex: number) => (<div key={qIndex} className="bg-white p-4 border border-gray-200 rounded-lg relative shadow-sm mb-4"><button onClick={() => removeQuizQuestion(i, qIndex)} className="absolute -top-3 -right-3 bg-white text-red-500 border border-gray-200 rounded-full w-6 h-6 flex items-center justify-center font-bold shadow-sm">&times;</button><div className="flex gap-3 mb-3"><select value={q.qType || 'mcq'} onChange={(e) => updateQuizQuestion(i, qIndex, 'qType', e.target.value)} className="w-1/3 p-3 border border-gray-300 rounded outline-none font-bold text-sm"><option value="mcq">⭕ Multiple Choice</option><option value="short">✏️ Short Text</option><option value="long">📄 Long Text</option></select><input placeholder="Question prompt..." value={q.question} onChange={(e) => updateQuizQuestion(i, qIndex, 'question', e.target.value)} className="w-2/3 p-3 border border-gray-300 rounded outline-none font-bold text-sm" /></div>{(!q.qType || q.qType === 'mcq') && (<><div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">{[0, 1, 2, 3].map((oIdx) => (<input key={oIdx} placeholder={`Option ${oIdx + 1}`} value={q.options[oIdx] || ""} onChange={(e) => updateQuizOption(i, qIndex, oIdx, e.target.value)} className="p-2 border border-gray-300 rounded text-sm outline-none" />))}</div><select value={q.answer} onChange={(e) => updateQuizQuestion(i, qIndex, 'answer', e.target.value)} className="w-full p-2.5 border border-brand-purple/50 bg-brand-purple/5 rounded text-sm font-bold text-brand-darkPurple outline-none"><option value="">Select CORRECT answer...</option>{q.options.map((opt: string, oIndex: number) => opt && <option key={oIndex} value={opt}>{opt}</option>)}</select></>)}</div>))}</div>)}{chapter.type !== 'quiz' && chapter.type !== 'text' && (<div className="ml-11 flex items-center gap-4 bg-white p-4 rounded-lg border-2 border-dashed border-gray-300">{chapter.isUploading ? <span className="text-brand-purple font-bold text-sm animate-pulse">⏳ {chapter.uploadStatus || "Uploading..."}</span> : chapter.fileUrl ? <span className="text-brand-success font-bold text-sm truncate">✓ attached</span> : (<><span className="flex-1 text-sm text-gray-500 font-bold">Attach file:</span><label className="cursor-pointer bg-brand-purple/10 px-4 py-2 rounded-md text-sm font-bold text-brand-purple hover:bg-brand-purple/20 transition whitespace-nowrap">☁️ Choose File<input type="file" className="hidden" accept={chapter.type === 'scorm' ? '.zip' : undefined} onChange={(e) => handleFileUpload(i, e)} /></label></>)}</div>)}</div>))}</div></div></div><div className="space-y-6"><div className="bg-brand-darkPurple p-6 rounded-xl shadow-lg text-white sticky top-8 h-fit"><h2 className="text-lg font-bold mb-6 text-brand-yellow">Publish Course</h2><button onClick={handleSaveCourse} disabled={isSaving || chapters.some(c => c.isUploading)} className="w-full bg-brand-yellow text-brand-darkPurple font-bold py-3.5 rounded-lg hover:bg-brand-lightYellow transition disabled:opacity-50">Save & Publish &rarr;</button></div><div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h2 className="text-lg font-bold text-brand-purple mb-4 border-b border-gray-100 pb-4">🗑️ Live Courses</h2>{existingCourses.length === 0 ? <p className="text-gray-500 font-bold">No courses published.</p> : (<div className="space-y-2">{existingCourses.map(c => (<div key={c.id} className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0"><span className="text-sm font-bold text-brand-darkGrey truncate pr-4">{c.title}</span><button onClick={() => handleDeleteCourse(c.id, c.title)} className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold hover:bg-red-200 transition">Delete</button></div>))}</div>)}</div></div></div>
