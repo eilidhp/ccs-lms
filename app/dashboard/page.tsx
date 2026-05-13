@@ -14,6 +14,12 @@ export default function Dashboard() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [events, setEvents] = useState<any[]>([]);
   const [selectedEventModal, setSelectedEventModal] = useState<any>(null);
+
+  // 🧠 NEW: Reminder Edit States
+  const [isEditingEvent, setIsEditingEvent] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDate, setEditDate] = useState("");
+  const [editLink, setEditLink] = useState("");
   
   // Notes & Progress state
   const [allProgress, setAllProgress] = useState<any[]>([]);
@@ -56,7 +62,25 @@ export default function Dashboard() {
 
   const year = currentDate.getFullYear(); const month = currentDate.getMonth(); const daysInMonth = new Date(year, month + 1, 0).getDate(); const firstDay = new Date(year, month, 1).getDay(); const startOffset = firstDay === 0 ? 6 : firstDay - 1; const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const handleAddEvent = async (day: number) => { const title = window.prompt(`Log a reminder for ${day} ${monthNames[month]}:`); if (!title) return; const link_url = window.prompt(`Optional: Add a link for this event`); const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`; await supabase.from('calendar_events').insert({ user_email: userEmail, event_date: dateStr, title, link_url: link_url || "" }); fetchEvents(userEmail); };
-  const handleDeleteEvent = async (id: number) => { if(window.confirm("Delete reminder?")) { await supabase.from('calendar_events').delete().eq('id', id); fetchEvents(userEmail); setSelectedEventModal(null); } };
+  const handleDeleteEvent = async (id: number) => { if(window.confirm("Delete reminder?")) { await supabase.from('calendar_events').delete().eq('id', id); fetchEvents(userEmail); setSelectedEventModal(null); setIsEditingEvent(false); } };
+
+  // 🧠 NEW: Function to Save Edited Event
+  const handleUpdateEvent = async () => {
+    if (!editTitle || !editDate) { alert("Title and date are required!"); return; }
+    const { error } = await supabase.from('calendar_events').update({ 
+      title: editTitle, 
+      event_date: editDate, 
+      link_url: editLink 
+    }).eq('id', selectedEventModal.id);
+
+    if (!error) {
+      fetchEvents(userEmail);
+      setSelectedEventModal({ ...selectedEventModal, title: editTitle, event_date: editDate, link_url: editLink });
+      setIsEditingEvent(false);
+    } else {
+      alert("Error updating reminder: " + error.message);
+    }
+  };
 
   if (loading) return <div className="min-h-screen flex justify-center items-center text-brand-purple font-bold text-xl bg-gray-50">Authenticating...</div>;
   const isAdmin = userEmail.toLowerCase().endsWith("@changeconsultingscotland.co.uk");
@@ -64,13 +88,50 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen p-8 max-w-7xl mx-auto relative">
       {selectedEventModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setSelectedEventModal(null)}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => { setSelectedEventModal(null); setIsEditingEvent(false); }}>
           <div className="bg-white rounded-xl shadow-2xl p-8 max-w-sm w-full text-center border-t-8 border-brand-yellow" onClick={e => e.stopPropagation()}>
-            <h3 className="text-2xl font-black text-brand-darkPurple mb-2">{selectedEventModal.title}</h3>
-            <p className="text-sm font-bold text-gray-500 mb-6">{selectedEventModal.event_date}</p>
-            {selectedEventModal.link_url && <a href={selectedEventModal.link_url.startsWith('http') ? selectedEventModal.link_url : `https://${selectedEventModal.link_url}`} target="_blank" rel="noreferrer" className="block w-full bg-brand-purple text-white font-bold py-3 rounded-lg mb-3 hover:bg-brand-darkPurple transition">🔗 Open Link</a>}
-            <button onClick={() => handleDeleteEvent(selectedEventModal.id)} className="block w-full bg-red-50 text-red-600 font-bold py-3 rounded-lg border border-red-200 mb-3 hover:bg-red-100 transition">🗑️ Delete Reminder</button>
-            <button onClick={() => setSelectedEventModal(null)} className="block w-full bg-gray-100 text-gray-600 font-bold py-3 rounded-lg hover:bg-gray-200 transition">Cancel</button>
+            
+            {/* 🧠 SMART UI TOGGLE: View Mode vs Edit Mode */}
+            {!isEditingEvent ? (
+              <>
+                <h3 className="text-2xl font-black text-brand-darkPurple mb-2">{selectedEventModal.title}</h3>
+                <p className="text-sm font-bold text-gray-500 mb-6">{selectedEventModal.event_date}</p>
+                {selectedEventModal.link_url && <a href={selectedEventModal.link_url.startsWith('http') ? selectedEventModal.link_url : `https://${selectedEventModal.link_url}`} target="_blank" rel="noreferrer" className="block w-full bg-brand-purple text-white font-bold py-3 rounded-lg mb-3 hover:bg-brand-darkPurple transition shadow-sm">🔗 Open Link</a>}
+                
+                <button onClick={() => {
+                  setEditTitle(selectedEventModal.title);
+                  setEditDate(selectedEventModal.event_date);
+                  setEditLink(selectedEventModal.link_url || "");
+                  setIsEditingEvent(true);
+                }} className="block w-full bg-blue-50 text-blue-600 font-bold py-3 rounded-lg border border-blue-200 mb-3 hover:bg-blue-100 transition shadow-sm">✏️ Edit Reminder</button>
+                
+                <button onClick={() => handleDeleteEvent(selectedEventModal.id)} className="block w-full bg-red-50 text-red-600 font-bold py-3 rounded-lg border border-red-200 mb-3 hover:bg-red-100 transition shadow-sm">🗑️ Delete Reminder</button>
+                <button onClick={() => { setSelectedEventModal(null); setIsEditingEvent(false); }} className="block w-full bg-gray-100 text-gray-600 font-bold py-3 rounded-lg hover:bg-gray-200 transition">Cancel</button>
+              </>
+            ) : (
+              <div className="text-left space-y-4">
+                <h3 className="text-xl font-black text-brand-darkPurple mb-2 text-center">Edit Reminder</h3>
+                
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 block">Title</label>
+                  <input type="text" value={editTitle} onChange={e => setEditTitle(e.target.value)} className="w-full border border-gray-300 rounded-lg p-2.5 outline-none focus:border-brand-purple text-sm font-bold text-gray-700" />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 block">Date</label>
+                  <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)} className="w-full border border-gray-300 rounded-lg p-2.5 outline-none focus:border-brand-purple text-sm font-bold text-gray-600" />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 block">Link URL (Optional)</label>
+                  <input type="text" value={editLink} onChange={e => setEditLink(e.target.value)} className="w-full border border-gray-300 rounded-lg p-2.5 outline-none focus:border-brand-purple text-sm font-bold text-gray-700" placeholder="https://..." />
+                </div>
+                
+                <div className="pt-2 flex gap-3">
+                  <button onClick={() => setIsEditingEvent(false)} className="flex-1 bg-gray-100 text-gray-600 font-bold py-3 rounded-lg hover:bg-gray-200 transition shadow-sm">Cancel</button>
+                  <button onClick={handleUpdateEvent} className="flex-1 bg-brand-success text-white font-bold py-3 rounded-lg hover:bg-green-700 transition shadow-sm">Save ✓</button>
+                </div>
+              </div>
+            )}
+
           </div>
         </div>
       )}
@@ -143,7 +204,12 @@ export default function Dashboard() {
                 return (
                   <div key={day} onClick={(e) => { if ((e.target as HTMLElement).tagName !== 'DIV' || !(e.target as HTMLElement).className.includes('text-[9px]')) handleAddEvent(day); }} className={`min-h-[50px] p-1 border rounded cursor-pointer relative group transition ${isToday ? 'border-brand-purple bg-brand-purple/5' : dayEvents.length > 0 ? "border-brand-yellow bg-brand-lightYellow/10" : "hover:border-brand-purple hover:bg-gray-50 border-gray-100"}`}>
                     <span className={`text-sm font-bold block text-center ${dayEvents.length > 0 || isToday ? 'text-brand-darkPurple' : 'text-gray-500'}`}>{day}</span>
-                    <div className="mt-1 space-y-1">{dayEvents.map(ev => <div key={ev.id} onClick={(e) => { e.stopPropagation(); setSelectedEventModal(ev); }} className="text-[9px] bg-brand-yellow text-brand-darkPurple rounded px-1 py-1 truncate font-bold text-center cursor-pointer hover:bg-brand-lightYellow shadow-sm" title="Click to View/Delete">{ev.link_url ? '🔗 ' : ''}{ev.title}</div>)}</div>
+                    <div className="mt-1 space-y-1">{dayEvents.map(ev => <div key={ev.id} onClick={(e) => { 
+                      e.stopPropagation(); 
+                      setSelectedEventModal(ev);
+                      // Reset edit state just in case
+                      setIsEditingEvent(false);
+                    }} className="text-[9px] bg-brand-yellow text-brand-darkPurple rounded px-1 py-1 truncate font-bold text-center cursor-pointer hover:bg-brand-lightYellow shadow-sm" title="Click to View/Edit">{ev.link_url ? '🔗 ' : ''}{ev.title}</div>)}</div>
                   </div>
                 );
               })}
