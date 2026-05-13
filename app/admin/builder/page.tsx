@@ -40,9 +40,8 @@ export default function InstructorPortal() {
 
   const handleDeleteCourse = async (id: number, title: string) => { if (window.confirm(`🚨 Delete "${title}"?`)) { await supabase.from('courses').delete().eq('id', id); fetchAdminData(); } };
 
-  // NEW: DELETE USER LOGIC
   const handleRemoveUser = async (email: string, name: string) => {
-    if (window.confirm(`🚨 WARNING: Are you absolutely sure you want to remove ${name || email}?\n\nThis will permanently delete their profile, enrolments, notes, quiz submissions, and progress. This action cannot be undone.`)) {
+    if (window.confirm(`🚨 WARNING: Are you absolutely sure you want to remove ${name || email}?\n\nThis will permanently delete their profile, enrollments, notes, quiz submissions, and progress. This action cannot be undone.`)) {
       await supabase.from('profiles').delete().eq('email', email);
       fetchAdminData();
       setExpandedUser(null);
@@ -99,17 +98,18 @@ export default function InstructorPortal() {
       </header>
 
       <div className="flex gap-4 mb-8 border-b border-gray-200 overflow-x-auto pb-1">
-        {["builder", "enrolments", "reports", "submissions"].map((tab) => (
+        {/* Spelling updated below to 'enrollments' */}
+        {["builder", "enrollments", "reports", "submissions"].map((tab) => (
           <button key={tab} onClick={() => setActiveTab(tab)} className={`pb-3 px-4 font-black text-lg transition-colors border-b-4 whitespace-nowrap ${activeTab === tab ? "border-brand-purple text-brand-darkPurple" : "border-transparent text-gray-400 hover:text-gray-600"}`}>
-            {tab === "builder" ? "🏗️ Course Builder" : tab === "enrolments" ? "👥 Manage Enrolments" : tab === "reports" ? "📈 Progress Reports" : "📊 Quiz Submissions"}
+            {tab === "builder" ? "🏗️ Course Builder" : tab === "enrollments" ? "👥 Manage Enrollments" : tab === "reports" ? "📈 Progress Reports" : "📊 Quiz Submissions"}
           </button>
         ))}
       </div>
 
-      {activeTab === "enrolments" && (
+      {activeTab === "enrollments" && (
         <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200 space-y-6">
           <div className="flex justify-between items-center mb-2">
-            <h2 className="text-2xl font-black text-brand-darkPurple">Learner Enrolments</h2>
+            <h2 className="text-2xl font-black text-brand-darkPurple">Learner Enrollments</h2>
             <input type="text" placeholder="Search users by name or email..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="border border-gray-300 rounded-lg p-2.5 text-sm font-bold outline-none focus:border-brand-purple w-64" />
           </div>
           <div className="space-y-3">
@@ -126,7 +126,6 @@ export default function InstructorPortal() {
                     </div>
                   </div>
                   <div className="flex items-center gap-4">
-                    {/* NEW: REMOVE USER BUTTON */}
                     {!isAdmin && (
                       <button onClick={(e) => { e.stopPropagation(); handleRemoveUser(user.email, user.full_name); }} className="text-xs bg-red-100 text-red-600 px-3 py-1.5 rounded-lg font-bold hover:bg-red-200 transition shadow-sm border border-red-200">
                         🗑️ Remove User
@@ -157,7 +156,7 @@ export default function InstructorPortal() {
         </div>
       )}
 
-      {/* KEEPING THE REST OF THE TABS INTACT FOR brevity */}
+      {/* KEEPING THE REST OF THE TABS INTACT */}
       {activeTab === "reports" && (
         <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200"><h2 className="text-2xl font-black text-brand-darkPurple mb-6">Learner Progress Reports</h2><div className="space-y-6">{users.filter(u => !u.email.toLowerCase().endsWith("@changeconsultingscotland.co.uk")).map(user => { const userEnrolls = enrollments.filter(e => e.user_email === user.email); if (userEnrolls.length === 0) return null; return (<div key={user.email} className="border border-gray-200 p-6 rounded-xl bg-gray-50"><div className="flex justify-between items-start mb-4 border-b border-gray-200 pb-4"><div><h3 className="font-bold text-lg text-brand-darkGrey">{user.full_name || "No Name Provided"}</h3><p className="text-sm font-bold text-gray-500">{user.email}</p></div><div className="text-right"><p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Last Log In</p><p className="text-sm font-bold text-brand-purple">{user.last_login ? new Date(user.last_login).toLocaleDateString() : "Never"}</p></div></div><div className="space-y-3">{userEnrolls.map(enr => { const course = existingCourses.find(c => c.id === enr.course_id); if (!course) return null; const totalMods = course.chapters?.length || 0; const prog = progressData.find(p => p.user_email === user.email && p.course_id === course.id); const compMods = prog?.completed_chapters?.length || 0; const percent = totalMods === 0 ? 0 : Math.round((compMods / totalMods) * 100); return (<div key={course.id} className="bg-white border border-gray-200 p-3 rounded-lg flex items-center justify-between shadow-sm"><span className="font-bold text-sm text-gray-700 w-1/3 truncate pr-4">{course.title}</span><div className="flex-1 px-4"><div className="w-full bg-gray-100 rounded-full h-2.5"><div className="bg-brand-success h-2.5 rounded-full" style={{ width: `${percent}%` }}></div></div></div><span className="font-bold text-brand-success text-sm w-16 text-right">{percent}%</span></div>); })}</div></div>); })}</div></div>
       )}
