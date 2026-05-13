@@ -109,11 +109,12 @@ export default function Dashboard() {
                 {courses.map((c: any, i: number) => {
                   const fallbackBg = ["bg-brand-darkPurple", "bg-brand-purple", "bg-brand-yellow", "bg-gray-800"][i % 4];
                   
-                  // Progress Calculation
-                  const cProg = allProgress.find(p => p.course_id === c.id);
+                  // Safer math calculation for Progress Percentages!
+                  const cProg = allProgress.find(p => Number(p.course_id) === Number(c.id));
                   const totalChapters = c.chapters?.length || 1;
-                  const completedCount = cProg?.completed_chapters?.length || 0;
-                  const progressPercent = Math.min(100, Math.round((completedCount / totalChapters) * 100));
+                  // We ensure we only count UNIQUE completed chapters!
+                  const uniqueCompleted = cProg?.completed_chapters ? Array.from(new Set(cProg.completed_chapters)).length : 0;
+                  const progressPercent = Math.min(100, Math.round((uniqueCompleted / totalChapters) * 100));
 
                   return (
                     <Link href={`/course/${c.id}`} key={c.id}>

@@ -15,7 +15,6 @@ export default function CoursePlayer() {
   const [showQuestion, setShowQuestion] = useState(false);
   const [activeChapterIndex, setActiveChapterIndex] = useState(0);
 
-  // PROGRESS AND NOTES STATE
   const [completedChapters, setCompletedChapters] = useState<number[]>([]);
   const [currentNote, setCurrentNote] = useState("");
   const [isSavingNote, setIsSavingNote] = useState(false);
@@ -32,8 +31,8 @@ export default function CoursePlayer() {
       const { data: c } = await supabase.from('courses').select('*').eq('id', params.id).single();
       if (c) setCourse(c);
 
-      // Fetch user's progress for this course
-      const { data: prog } = await supabase.from('course_progress').select('*').match({ user_email: email, course_id: params.id }).single();
+      // GUARANTEED MATH FIX: Ensure it correctly selects existing progress!
+      const { data: prog } = await supabase.from('course_progress').select('*').match({ user_email: email, course_id: params.id }).maybeSingle();
       if (prog) setCompletedChapters(prog.completed_chapters || []);
 
       setLoading(false);
@@ -41,11 +40,10 @@ export default function CoursePlayer() {
     fetchData();
   }, [params?.id]);
 
-  // Load existing note when changing chapters!
   useEffect(() => {
     async function loadNote() {
       if (!userEmail || !course) return;
-      const { data } = await supabase.from('user_notes').select('content').match({ user_email: userEmail, course_id: course.id, chapter_index: activeChapterIndex }).single();
+      const { data } = await supabase.from('user_notes').select('content').match({ user_email: userEmail, course_id: course.id, chapter_index: activeChapterIndex }).maybeSingle();
       setCurrentNote(data ? data.content : "");
     }
     loadNote();
@@ -57,37 +55,45 @@ export default function CoursePlayer() {
   const currentChapter = course.chapters?.[activeChapterIndex] || { title: "Introduction", type: "video" };
   const isAdmin = userEmail.toLowerCase().endsWith("@changeconsultingscotland.co.uk");
   
-  // SEQUENTIAL LOCK LOGIC: You can access if you are admin, OR if the index is <= (highest completed + 1)
   const highestCompleted = completedChapters.length > 0 ? Math.max(...completedChapters) : -1;
   const maxAllowedIndex = isAdmin ? 999 : highestCompleted + 1;
+  const isCurrentlyCompleted = completedChapters.includes(activeChapterIndex);
 
   const handleSaveNote = async () => {
     setIsSavingNote(true);
-    await supabase.from('user_notes').upsert({
-      user_email: userEmail, course_id: course.id, chapter_index: activeChapterIndex, course_title: course.title, chapter_title: currentChapter.title, content: currentNote
-    });
+    await supabase.from('user_notes').upsert({ user_email: userEmail, course_id: course.id, chapter_index: activeChapterIndex, course_title: course.title, chapter_title: currentChapter.title, content: currentNote }, { onConflict: 'user_email,course_id,chapter_index' });
     setTimeout(() => setIsSavingNote(false), 1000);
   };
 
   const handleNextModule = async () => {
-    // Save progress to database
     const newCompleted = Array.from(new Set([...completedChapters, activeChapterIndex]));
     setCompletedChapters(newCompleted);
-    await supabase.from('course_progress').upsert({ user_email: userEmail, course_id: course.id, completed_chapters: newCompleted, last_accessed: new Date().toISOString() });
+    
+    // GUARANTEED MATH FIX: Use a specific ID update if it exists so it doesn't fail silently!
+    const { data: existing } = await supabase.from('course_progress').select('id').match({ user_email: userEmail, course_id: course.id }).maybeSingle();
+    
+    if (existing) {
+      await supabase.from('course_progress').update({ completed_chapters: newCompleted, last_accessed: new Date().toISOString() }).eq('id', existing.id);
+    } else {
+      await supabase.from('course_progress').insert({ user_email: userEmail, course_id: course.id, completed_chapters: newCompleted, last_accessed: new Date().toISOString() });
+    }
 
     if (activeChapterIndex < (course.chapters?.length || 0) - 1) setActiveChapterIndex(activeChapterIndex + 1);
     else { alert("🎉 Course Complete! Returning to dashboard."); router.push('/dashboard'); }
   };
 
+  const isScorm = currentChapter.type === 'scorm';
+
   const renderMediaContent = () => {
     if (currentChapter.type === 'text') return null; 
-    if (currentChapter.type === 'quiz') return <div className="w-full mb-8 max-w-3xl mx-auto"><QuizEngine onPass={handleNextModule} questions={currentChapter.questions || []} userEmail={userEmail} courseId={course.id} courseTitle={course.title} chapterTitle={currentChapter.title} /></div>;
+    if (currentChapter.type === 'quiz') return <div className="w-full mb-8 max-w-4xl mx-auto"><QuizEngine onPass={handleNextModule} questions={currentChapter.questions || []} userEmail={userEmail} courseId={course.id} courseTitle={course.title} chapterTitle={currentChapter.title} /></div>;
     if (!currentChapter.fileUrl) return <div className="w-full aspect-video bg-gray-900 rounded-xl flex items-center justify-center text-gray-500 shadow-lg mb-8 font-bold">No media attached.</div>;
 
     switch (currentChapter.type) {
       case 'video': return <div className="w-full aspect-video bg-black rounded-xl overflow-hidden shadow-lg border border-gray-200 mb-8"><video controls className="w-full h-full object-contain" src={currentChapter.fileUrl} controlsList="nodownload">Error</video></div>;
       case 'pdf': return <div className="w-full h-[600px] rounded-xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 mb-8"><iframe src={`${currentChapter.fileUrl}#toolbar=0`} className="w-full h-full" /></div>;
-      case 'scorm': return <div className="w-full h-[700px] bg-white rounded-xl overflow-hidden shadow-lg border border-gray-200 mb-8 flex flex-col"><div className="w-full h-10 bg-brand-darkPurple text-center text-xs font-bold text-brand-yellow uppercase tracking-wider flex items-center justify-center z-10 shrink-0 pointer-events-none">📦 Interactive SCORM Module Running</div><iframe src={currentChapter.fileUrl} className="w-full h-full border-0 bg-white" allowFullScreen /></div>;
+      // FULL SCREEN SCORM
+      case 'scorm': return <div className="absolute inset-0 w-full h-full flex flex-col"><div className="w-full h-8 bg-brand-darkPurple text-center text-[10px] font-bold text-brand-yellow uppercase tracking-widest flex items-center justify-center z-10 shrink-0 pointer-events-none">📦 SCORM Module Running</div><iframe src={currentChapter.fileUrl} className="w-full flex-1 border-0 bg-white" allowFullScreen /></div>;
       default: return null;
     }
   };
@@ -101,11 +107,13 @@ export default function CoursePlayer() {
              {course.chapters?.map((chapter: any, index: number) => {
                const isLocked = index > maxAllowedIndex;
                const isCompleted = completedChapters.includes(index);
+               // SUB-CHAPTER INDENTATION
+               const indentClass = chapter.isSubChapter ? "ml-6 text-sm border-l-4 border-l-brand-purple/30 bg-white shadow-sm" : "";
                
                return (
-                 <li key={chapter.id || index} onClick={() => !isLocked && setActiveChapterIndex(index)} className={`p-3 font-bold rounded-lg border transition-all flex items-center gap-3 ${isLocked ? 'opacity-50 cursor-not-allowed bg-gray-100 border-gray-200' : index === activeChapterIndex ? "bg-brand-purple/10 text-brand-purple border-brand-purple shadow-sm cursor-pointer" : "text-gray-500 hover:bg-gray-200 border-transparent cursor-pointer"}`}>
-                   <span className="text-xl w-6 text-center">{isLocked ? '🔒' : isCompleted ? '✅' : chapter.type === 'video' ? '🎥' : chapter.type === 'scorm' ? '📦' : chapter.type === 'quiz' ? '❓' : chapter.type === 'text' ? '📝' : '📄'}</span>
-                   <span className="truncate flex-1 text-sm">{chapter.title || `Module ${index + 1}`}</span>
+                 <li key={chapter.id || index} onClick={() => !isLocked && setActiveChapterIndex(index)} className={`p-3 font-bold rounded-lg border transition-all flex items-center gap-3 ${indentClass} ${isLocked ? 'opacity-50 cursor-not-allowed bg-gray-100 border-gray-200' : index === activeChapterIndex ? "bg-brand-purple/10 text-brand-purple border-brand-purple shadow-sm cursor-pointer" : "text-gray-500 hover:bg-gray-200 border-transparent cursor-pointer"}`}>
+                   <span className="text-xl w-6 text-center">{isLocked ? '🔒' : isCompleted ? '✅' : chapter.isSubChapter ? '↳' : chapter.type === 'video' ? '🎥' : chapter.type === 'scorm' ? '📦' : chapter.type === 'quiz' ? '❓' : chapter.type === 'text' ? '📝' : '📄'}</span>
+                   <span className="truncate flex-1">{chapter.title || `Module ${index + 1}`}</span>
                  </li>
                )
              })}
@@ -113,35 +121,50 @@ export default function CoursePlayer() {
         </div>
       </aside>
 
-      <main className="flex-1 flex flex-col min-w-0 bg-gray-50/30 overflow-hidden">
+      <main className="flex-1 flex flex-col min-w-0 bg-gray-50/30 overflow-hidden relative">
         <header className="h-16 border-b border-gray-200 flex items-center justify-between px-6 bg-white shrink-0 shadow-sm z-10"><button onClick={() => setSidebarOpen(!sidebarOpen)} className="text-brand-darkGrey font-bold text-sm hover:text-brand-purple">☰ {sidebarOpen ? "Minimise Menu" : "Table of Contents"}</button></header>
-        <div className="flex-1 overflow-y-auto p-8 lg:p-12">
-          <div className="max-w-4xl mx-auto w-full pb-8">
-            <h1 className="text-3xl font-black text-brand-darkPurple mb-6">{currentChapter.title || "Module Content"}</h1>
-            {currentChapter.textContent && <div className="mb-8 p-6 bg-white border border-gray-200 rounded-xl shadow-sm text-gray-700 leading-relaxed text-lg whitespace-pre-wrap">{currentChapter.textContent}</div>}
-            
+        
+        {/* CONDITIONAL SCORM FULL SCREEN */}
+        {isScorm ? (
+          <div className="flex-1 w-full h-full bg-white relative">
             {renderMediaContent()}
-            
-            {/* The Connected Notes App */}
-            {currentChapter.type !== 'quiz' && currentChapter.type !== 'scorm' && (
-              <div className="bg-brand-lightYellow/20 p-6 rounded-xl border border-brand-yellow/50">
-                <div className="flex justify-between items-center mb-2">
-                  <label className="text-sm font-bold text-brand-darkPurple block">📝 My Personal Notes</label>
-                  <button onClick={handleSaveNote} disabled={isSavingNote} className="text-xs bg-brand-yellow text-brand-darkPurple font-bold px-3 py-1.5 rounded shadow-sm hover:bg-brand-lightYellow transition">{isSavingNote ? "Saved! ✓" : "💾 Save Note"}</button>
-                </div>
-                <textarea value={currentNote} onChange={(e) => setCurrentNote(e.target.value)} className="w-full border border-gray-300 rounded-lg p-4 text-sm min-h-[120px] bg-white outline-none resize-y focus:border-brand-purple mb-1" placeholder="Jot down thoughts... (Click Save Note to secure them)"/>
-                <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider text-right">Notes are saved securely to your profile.</p>
-              </div>
-            )}
           </div>
-        </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto p-8 lg:p-12">
+            <div className="max-w-4xl mx-auto w-full pb-8">
+              <h1 className="text-3xl font-black text-brand-darkPurple mb-6">{currentChapter.title || "Module Content"}</h1>
+              {currentChapter.textContent && <div className="mb-8 p-6 bg-white border border-gray-200 rounded-xl shadow-sm text-gray-700 leading-relaxed text-lg whitespace-pre-wrap">{currentChapter.textContent}</div>}
+              
+              {renderMediaContent()}
+              
+              {currentChapter.type !== 'quiz' && (
+                <div className="bg-brand-lightYellow/20 p-6 rounded-xl border border-brand-yellow/50">
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-sm font-bold text-brand-darkPurple block">📝 My Personal Notes</label>
+                    <button onClick={handleSaveNote} disabled={isSavingNote} className="text-xs bg-brand-yellow text-brand-darkPurple font-bold px-3 py-1.5 rounded shadow-sm hover:bg-brand-lightYellow transition">{isSavingNote ? "Saved! ✓" : "💾 Save Note"}</button>
+                  </div>
+                  <textarea value={currentNote} onChange={(e) => setCurrentNote(e.target.value)} className="w-full border border-gray-300 rounded-lg p-4 text-sm min-h-[120px] bg-white outline-none resize-y focus:border-brand-purple mb-1" placeholder="Jot down thoughts... (Click Save Note to secure them)"/>
+                  <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider text-right">Notes are saved securely to your profile.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
-        {currentChapter.type !== 'quiz' && (
-          <div className="bg-white border-t border-gray-200 p-6 px-8 lg:px-12 flex justify-end shrink-0 z-10 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+        {/* BOTTOM ACTION BAR */}
+        {currentChapter.type !== 'quiz' && !isCurrentlyCompleted && (
+          <div className="bg-white border-t border-gray-200 p-6 px-8 lg:px-12 flex justify-end shrink-0 z-10 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] relative z-20">
             <button onClick={() => setShowQuestion(true)} className="bg-brand-purple text-white px-8 py-3.5 rounded-full font-bold text-lg hover:-translate-y-1 transition border-2 border-brand-darkPurple hover:bg-brand-darkPurple cursor-pointer shadow-md">Complete Module &rarr;</button>
           </div>
         )}
-        {showQuestion && <QuestionModal question="Lock in progress & Unlock next module?" options={["Yes, save my progress!", "No, I need to review"]} correctAnswer="Yes, save my progress!" onSuccess={() => { setShowQuestion(false); handleNextModule(); }} />}
+
+        {currentChapter.type !== 'quiz' && isCurrentlyCompleted && activeChapterIndex < (course.chapters?.length || 0) - 1 && (
+           <div className="bg-white border-t border-gray-200 p-6 px-8 lg:px-12 flex justify-end shrink-0 z-10 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] relative z-20">
+             <button onClick={() => setActiveChapterIndex(activeChapterIndex + 1)} className="bg-gray-800 text-white px-8 py-3.5 rounded-full font-bold text-lg hover:-translate-y-1 transition border-2 border-black hover:bg-black cursor-pointer shadow-md">Next Module &rarr;</button>
+           </div>
+        )}
+        
+        {showQuestion && <QuestionModal question="Are you ready to lock in your progress and unlock the next module?" options={["Yes, save my progress!", "No, I need to review"]} correctAnswer="Yes, save my progress!" onSuccess={() => { setShowQuestion(false); handleNextModule(); }} />}
       </main>
     </div>
   );

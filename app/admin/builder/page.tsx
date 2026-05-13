@@ -2,6 +2,25 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import JSZip from "jszip"; // OUR NEW BROWSER UNZIPPER!
+
+const getMimeType = (filename: string) => {
+  const ext = filename.split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'html': case 'htm': return 'text/html';
+    case 'css': return 'text/css';
+    case 'js': return 'application/javascript';
+    case 'png': return 'image/png';
+    case 'jpg': case 'jpeg': return 'image/jpeg';
+    case 'gif': return 'image/gif';
+    case 'svg': return 'image/svg+xml';
+    case 'json': return 'application/json';
+    case 'mp4': return 'video/mp4';
+    case 'mp3': return 'audio/mpeg';
+    case 'woff': case 'woff2': return 'font/woff2';
+    default: return 'application/octet-stream';
+  }
+};
 
 export default function InstructorPortal() {
   const [activeTab, setActiveTab] = useState("builder");
@@ -10,7 +29,9 @@ export default function InstructorPortal() {
   const [courseTitle, setCourseTitle] = useState("");
   const [thumbnailUrl, setThumbnailUrl] = useState("");
   const [isUploadingThumb, setIsUploadingThumb] = useState(false);
-  const [chapters, setChapters] = useState<any[]>([{ id: 1, title: "", textContent: "", type: "text", fileUrl: "", fileName: "", isUploading: false, questions: [] }]);
+  
+  // NEW: Added isSubChapter property and uploadStatus message tracking
+  const [chapters, setChapters] = useState<any[]>([{ id: 1, title: "", isSubChapter: false, textContent: "", type: "text", fileUrl: "", fileName: "", isUploading: false, uploadStatus: "", questions: [] }]);
   
   const [existingCourses, setExistingCourses] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
@@ -39,14 +60,7 @@ export default function InstructorPortal() {
   };
 
   const handleDeleteCourse = async (id: number, title: string) => { if (window.confirm(`🚨 Delete "${title}"?`)) { await supabase.from('courses').delete().eq('id', id); fetchAdminData(); } };
-
-  const handleRemoveUser = async (email: string, name: string) => {
-    if (window.confirm(`🚨 WARNING: Are you absolutely sure you want to remove ${name || email}?\n\nThis will permanently delete their profile, enrollments, notes, quiz submissions, and progress. This action cannot be undone.`)) {
-      await supabase.from('profiles').delete().eq('email', email);
-      fetchAdminData();
-      setExpandedUser(null);
-    }
-  };
+  const handleRemoveUser = async (email: string, name: string) => { if (window.confirm(`🚨 WARNING: Are you sure you want to remove ${name || email}? This cannot be undone.`)) { await supabase.from('profiles').delete().eq('email', email); fetchAdminData(); setExpandedUser(null); } };
 
   const handleThumbUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return; setIsUploadingThumb(true);
@@ -56,7 +70,7 @@ export default function InstructorPortal() {
     setIsUploadingThumb(false);
   };
 
-  const addChapter = () => setChapters([...chapters, { id: Date.now(), title: "", textContent: "", type: "text", fileUrl: "", fileName: "", isUploading: false, questions: [] }]);
+  const addChapter = () => setChapters([...chapters, { id: Date.now(), title: "", isSubChapter: false, textContent: "", type: "text", fileUrl: "", fileName: "", isUploading: false, uploadStatus: "", questions: [] }]);
   const removeChapter = (id: number) => setChapters(chapters.filter(c => c.id !== id));
   const addQuizQuestion = (cIdx: number) => { const n = [...chapters]; if (!n[cIdx].questions) n[cIdx].questions = []; n[cIdx].questions.push({ qType: "mcq", question: "", options: ["", "", "", ""], answer: "" }); setChapters(n); };
   const removeQuizQuestion = (cIdx: number, qIdx: number) => { const n = [...chapters]; n[cIdx].questions.splice(qIdx, 1); setChapters(n); };
@@ -65,14 +79,52 @@ export default function InstructorPortal() {
 
   const handleFileUpload = async (index: number, event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; if (!file) return;
-    const newChapters = [...chapters]; newChapters[index].isUploading = true; newChapters[index].fileName = file.name; setChapters([...newChapters]);
+    const newChapters = [...chapters]; newChapters[index].isUploading = true; newChapters[index].fileName = file.name; newChapters[index].uploadStatus = "Preparing upload..."; setChapters([...newChapters]);
+    
     try {
       if (newChapters[index].type === 'scorm') {
-        const formData = new FormData(); formData.append("file", file);
-        const res = await fetch("/api/upload-scorm", { method: "POST", body: formData }); const data = await res.json();
-        if (data.error) throw new Error(data.error);
-        const finalChapters = [...chapters]; finalChapters[index].fileUrl = data.url; finalChapters[index].isUploading = false; setChapters(finalChapters); return;
+        // 🧠 NEW CLOUD SCORM EXTRACTION ENGINE (Bypasses Vercel Limit)
+        const zip = new JSZip();
+        const loadedZip = await zip.loadAsync(file);
+        const uniqueId = `scorm-${Date.now()}`;
+        
+        const fileNames = Object.keys(loadedZip.files);
+        const validNames = fileNames.filter(f => !f.includes("__MACOSX") && !f.startsWith("."));
+        const validFiles = validNames.filter(f => !loadedZip.files[f].dir);
+        
+        const lowerNames = validFiles.map(f => f.toLowerCase());
+        let mainFile = "index.html";
+        if (lowerNames.includes('story.html')) mainFile = validFiles[lowerNames.indexOf('story.html')];
+        else if (lowerNames.includes('scormdriver/indexapi.html')) mainFile = validFiles[lowerNames.indexOf('scormdriver/indexapi.html')];
+        else if (lowerNames.includes('index_lms.html')) mainFile = validFiles[lowerNames.indexOf('index_lms.html')];
+        else if (lowerNames.includes('index.html')) mainFile = validFiles[lowerNames.indexOf('index.html')];
+        else mainFile = validFiles.find(f => f.toLowerCase().endsWith('.html')) || validFiles[0];
+
+        // Upload in secure batches of 15 to keep the browser fast!
+        const batchSize = 15;
+        let uploadedCount = 0;
+        for (let i = 0; i < validFiles.length; i += batchSize) {
+          const batch = validFiles.slice(i, i + batchSize);
+          await Promise.all(batch.map(async (filename) => {
+            const blob = await loadedZip.files[filename].async("blob");
+            await supabase.storage.from('course-content').upload(`${uniqueId}/${filename}`, blob, { contentType: getMimeType(filename), upsert: true });
+          }));
+          uploadedCount += batch.length;
+          const progChapters = [...chapters];
+          progChapters[index].uploadStatus = `Uploading SCORM... ${Math.round((uploadedCount / validFiles.length) * 100)}%`;
+          setChapters(progChapters);
+        }
+
+        const { data: urlData } = supabase.storage.from('course-content').getPublicUrl(`${uniqueId}/${mainFile}`);
+        const finalChapters = [...chapters]; 
+        finalChapters[index].fileUrl = urlData.publicUrl; 
+        finalChapters[index].isUploading = false; 
+        finalChapters[index].uploadStatus = "";
+        setChapters(finalChapters); 
+        return;
       }
+
+      // Normal Media Upload
       const safeName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
       await supabase.storage.from('course-content').upload(safeName, file);
       const { data: urlData } = supabase.storage.from('course-content').getPublicUrl(safeName);
@@ -82,10 +134,10 @@ export default function InstructorPortal() {
 
   const handleSaveCourse = async () => {
     if (!courseTitle) { alert("Enter a title!"); return; } setIsSaving(true);
-    const chaptersToSave = chapters.map(({ isUploading, ...rest }) => rest);
+    const chaptersToSave = chapters.map(({ isUploading, uploadStatus, ...rest }) => rest);
     const { error } = await supabase.from('courses').insert([{ title: courseTitle, thumbnail_url: thumbnailUrl, chapters: chaptersToSave }]);
     setIsSaving(false);
-    if (!error) { alert("Course Published!"); setCourseTitle(""); setThumbnailUrl(""); setChapters([{ id: 1, title: "", textContent: "", type: "text", fileUrl: "", fileName: "", isUploading: false, questions: [] }]); fetchAdminData(); }
+    if (!error) { alert("Course Published!"); setCourseTitle(""); setThumbnailUrl(""); setChapters([{ id: 1, title: "", isSubChapter: false, textContent: "", type: "text", fileUrl: "", fileName: "", isUploading: false, uploadStatus: "", questions: [] }]); fetchAdminData(); }
   };
 
   const filteredUsers = users.filter(u => u.email.toLowerCase().includes(searchQuery.toLowerCase()) || (u.full_name && u.full_name.toLowerCase().includes(searchQuery.toLowerCase())));
@@ -98,7 +150,6 @@ export default function InstructorPortal() {
       </header>
 
       <div className="flex gap-4 mb-8 border-b border-gray-200 overflow-x-auto pb-1">
-        {/* Spelling updated below to 'enrollments' */}
         {["builder", "enrollments", "reports", "submissions"].map((tab) => (
           <button key={tab} onClick={() => setActiveTab(tab)} className={`pb-3 px-4 font-black text-lg transition-colors border-b-4 whitespace-nowrap ${activeTab === tab ? "border-brand-purple text-brand-darkPurple" : "border-transparent text-gray-400 hover:text-gray-600"}`}>
             {tab === "builder" ? "🏗️ Course Builder" : tab === "enrollments" ? "👥 Manage Enrollments" : tab === "reports" ? "📈 Progress Reports" : "📊 Quiz Submissions"}
@@ -108,46 +159,20 @@ export default function InstructorPortal() {
 
       {activeTab === "enrollments" && (
         <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200 space-y-6">
-          <div className="flex justify-between items-center mb-2">
-            <h2 className="text-2xl font-black text-brand-darkPurple">Learner Enrollments</h2>
-            <input type="text" placeholder="Search users by name or email..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="border border-gray-300 rounded-lg p-2.5 text-sm font-bold outline-none focus:border-brand-purple w-64" />
-          </div>
+          <div className="flex justify-between items-center mb-2"><h2 className="text-2xl font-black text-brand-darkPurple">Learner Enrollments</h2><input type="text" placeholder="Search users by name or email..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="border border-gray-300 rounded-lg p-2.5 text-sm font-bold outline-none focus:border-brand-purple w-64" /></div>
           <div className="space-y-3">
             {filteredUsers.map(user => {
               const isAdmin = user.email.toLowerCase().endsWith("@changeconsultingscotland.co.uk");
               return (
               <div key={user.email} className="border border-gray-200 rounded-lg bg-gray-50 overflow-hidden shadow-sm">
                 <div onClick={() => setExpandedUser(expandedUser === user.email ? null : user.email)} className="p-4 flex items-center justify-between cursor-pointer hover:bg-gray-100 transition">
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 bg-brand-yellow rounded-full flex items-center justify-center font-black text-brand-darkPurple">{user.full_name ? user.full_name.charAt(0).toUpperCase() : user.email.charAt(0).toUpperCase()}</div>
-                    <div>
-                      <h3 className="font-bold text-brand-darkGrey leading-tight">{user.full_name || "No Name Provided"} {isAdmin && <span className="ml-2 text-[10px] bg-brand-purple text-white px-2 py-0.5 rounded-full uppercase">Instructor</span>}</h3>
-                      <p className="text-sm font-bold text-gray-500 leading-tight">{user.email}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    {!isAdmin && (
-                      <button onClick={(e) => { e.stopPropagation(); handleRemoveUser(user.email, user.full_name); }} className="text-xs bg-red-100 text-red-600 px-3 py-1.5 rounded-lg font-bold hover:bg-red-200 transition shadow-sm border border-red-200">
-                        🗑️ Remove User
-                      </button>
-                    )}
-                    <span className="text-gray-400 font-bold w-4 text-center">{expandedUser === user.email ? "▲" : "▼"}</span>
-                  </div>
+                  <div className="flex items-center gap-4"><div className="w-10 h-10 bg-brand-yellow rounded-full flex items-center justify-center font-black text-brand-darkPurple">{user.full_name ? user.full_name.charAt(0).toUpperCase() : user.email.charAt(0).toUpperCase()}</div><div><h3 className="font-bold text-brand-darkGrey leading-tight">{user.full_name || "No Name Provided"} {isAdmin && <span className="ml-2 text-[10px] bg-brand-purple text-white px-2 py-0.5 rounded-full uppercase">Instructor</span>}</h3><p className="text-sm font-bold text-gray-500 leading-tight">{user.email}</p></div></div>
+                  <div className="flex items-center gap-4">{!isAdmin && <button onClick={(e) => { e.stopPropagation(); handleRemoveUser(user.email, user.full_name); }} className="text-xs bg-red-100 text-red-600 px-3 py-1.5 rounded-lg font-bold hover:bg-red-200 transition shadow-sm border border-red-200">🗑️ Remove User</button>}<span className="text-gray-400 font-bold w-4 text-center">{expandedUser === user.email ? "▲" : "▼"}</span></div>
                 </div>
                 {expandedUser === user.email && (
                   <div className="p-4 bg-white border-t border-gray-200">
                     <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Course Access Selection:</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {existingCourses.map(course => {
-                        const isEnrolled = enrollments.some(e => e.user_email === user.email && e.course_id === course.id);
-                        return (
-                          <label key={course.id} className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${isEnrolled ? "bg-brand-success/10 border-brand-success" : "bg-white border-gray-300 hover:border-brand-purple"}`}>
-                            <input type="checkbox" checked={isEnrolled} onChange={() => toggleEnrollment(user.email, course.id, isEnrolled)} className="w-5 h-5 accent-brand-success rounded cursor-pointer" />
-                            <span className={`font-bold text-sm truncate ${isEnrolled ? "text-brand-success" : "text-gray-600"}`}>{course.title}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">{existingCourses.map(course => { const isEnrolled = enrollments.some(e => e.user_email === user.email && e.course_id === course.id); return (<label key={course.id} className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${isEnrolled ? "bg-brand-success/10 border-brand-success" : "bg-white border-gray-300 hover:border-brand-purple"}`}><input type="checkbox" checked={isEnrolled} onChange={() => toggleEnrollment(user.email, course.id, isEnrolled)} className="w-5 h-5 accent-brand-success rounded cursor-pointer" /><span className={`font-bold text-sm truncate ${isEnrolled ? "text-brand-success" : "text-gray-600"}`}>{course.title}</span></label>); })}</div>
                   </div>
                 )}
               </div>
@@ -156,7 +181,6 @@ export default function InstructorPortal() {
         </div>
       )}
 
-      {/* KEEPING THE REST OF THE TABS INTACT */}
       {activeTab === "reports" && (
         <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200"><h2 className="text-2xl font-black text-brand-darkPurple mb-6">Learner Progress Reports</h2><div className="space-y-6">{users.filter(u => !u.email.toLowerCase().endsWith("@changeconsultingscotland.co.uk")).map(user => { const userEnrolls = enrollments.filter(e => e.user_email === user.email); if (userEnrolls.length === 0) return null; return (<div key={user.email} className="border border-gray-200 p-6 rounded-xl bg-gray-50"><div className="flex justify-between items-start mb-4 border-b border-gray-200 pb-4"><div><h3 className="font-bold text-lg text-brand-darkGrey">{user.full_name || "No Name Provided"}</h3><p className="text-sm font-bold text-gray-500">{user.email}</p></div><div className="text-right"><p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Last Log In</p><p className="text-sm font-bold text-brand-purple">{user.last_login ? new Date(user.last_login).toLocaleDateString() : "Never"}</p></div></div><div className="space-y-3">{userEnrolls.map(enr => { const course = existingCourses.find(c => c.id === enr.course_id); if (!course) return null; const totalMods = course.chapters?.length || 0; const prog = progressData.find(p => p.user_email === user.email && p.course_id === course.id); const compMods = prog?.completed_chapters?.length || 0; const percent = totalMods === 0 ? 0 : Math.round((compMods / totalMods) * 100); return (<div key={course.id} className="bg-white border border-gray-200 p-3 rounded-lg flex items-center justify-between shadow-sm"><span className="font-bold text-sm text-gray-700 w-1/3 truncate pr-4">{course.title}</span><div className="flex-1 px-4"><div className="w-full bg-gray-100 rounded-full h-2.5"><div className="bg-brand-success h-2.5 rounded-full" style={{ width: `${percent}%` }}></div></div></div><span className="font-bold text-brand-success text-sm w-16 text-right">{percent}%</span></div>); })}</div></div>); })}</div></div>
       )}
@@ -166,7 +190,17 @@ export default function InstructorPortal() {
       )}
 
       {activeTab === "builder" && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8"><div className="lg:col-span-2 space-y-6"><div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h2 className="text-lg font-bold text-brand-purple mb-4">Course Details</h2><input type="text" value={courseTitle} onChange={(e) => setCourseTitle(e.target.value)} placeholder="Course Title..." className="w-full border border-gray-300 rounded-lg p-3 mb-6 outline-none focus:border-brand-purple font-bold text-lg" /><h3 className="text-sm font-bold text-gray-700 mb-2">Course Dashboard Thumbnail</h3><div className="flex items-center gap-4">{thumbnailUrl ? <img src={thumbnailUrl} className="w-24 h-16 object-cover rounded border border-gray-200" alt="thumb" /> : <div className="w-24 h-16 bg-gray-100 border border-gray-200 rounded flex items-center justify-center text-xs font-bold text-gray-400">No Img</div>}<label className="cursor-pointer bg-brand-lightYellow/30 border border-brand-yellow px-4 py-2 rounded-lg text-sm font-bold text-brand-darkPurple hover:bg-brand-lightYellow transition">Upload Thumbnail Image<input type="file" accept="image/*" className="hidden" onChange={handleThumbUpload} disabled={isUploadingThumb}/></label></div></div><div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><div className="flex justify-between items-center mb-6"><h2 className="text-lg font-bold text-brand-purple">Curriculum Builder</h2><button onClick={addChapter} className="bg-brand-yellow text-brand-darkPurple px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-brand-lightYellow">+ Add Module</button></div><div className="space-y-6">{chapters.map((chapter, i) => (<div key={chapter.id} className="bg-gray-50 p-5 border border-gray-200 rounded-lg space-y-4 shadow-sm relative group"><div className="flex items-center gap-3 flex-wrap"><span className="w-8 h-8 flex items-center justify-center bg-brand-darkPurple text-white rounded font-bold shrink-0 shadow-sm">{i + 1}</span><input type="text" value={chapter.title} onChange={(e) => { const n = [...chapters]; n[i].title = e.target.value; setChapters(n); }} placeholder="Module Title..." className="flex-1 border border-gray-300 p-2.5 rounded-lg outline-none focus:border-brand-purple bg-white font-bold min-w-[150px]" /><select value={chapter.type} onChange={(e) => { const n = [...chapters]; n[i].type = e.target.value; setChapters(n); }} className="border border-gray-300 p-2.5 rounded-lg outline-none focus:border-brand-purple bg-white text-sm font-bold text-gray-600"><option value="text">📝 Text Only</option><option value="video">🎥 Video</option><option value="pdf">📄 PDF</option><option value="scorm">📦 SCORM</option><option value="quiz">❓ Quiz</option></select><button onClick={() => removeChapter(chapter.id)} className="text-red-400 font-bold px-2 text-2xl hover:text-red-600">&times;</button></div><div className="ml-11"><textarea value={chapter.textContent || ""} onChange={(e) => { const n = [...chapters]; n[i].textContent = e.target.value; setChapters(n); }} placeholder={chapter.type === 'text' ? "Type your course content here..." : "Add context, instructions, or body text..."} className="w-full border border-gray-300 rounded-lg p-3 text-sm min-h-[100px] outline-none focus:border-brand-purple bg-white resize-y" /></div>{chapter.type === 'quiz' && (<div className="ml-11 bg-brand-lightYellow/10 p-5 rounded-lg border-2 border-brand-yellow/50"><div className="flex justify-between items-center mb-4"><h4 className="font-bold text-brand-darkPurple text-sm uppercase tracking-wider">📝 Questions</h4><button onClick={() => addQuizQuestion(i)} className="text-xs bg-brand-yellow text-brand-darkPurple px-3 py-1.5 rounded font-bold shadow-sm hover:bg-brand-lightYellow">+ Add Q</button></div>{chapter.questions?.map((q: any, qIndex: number) => (<div key={qIndex} className="bg-white p-4 border border-gray-200 rounded-lg relative shadow-sm mb-4"><button onClick={() => removeQuizQuestion(i, qIndex)} className="absolute -top-3 -right-3 bg-white text-red-500 border border-gray-200 rounded-full w-6 h-6 flex items-center justify-center font-bold shadow-sm">&times;</button><div className="flex gap-3 mb-3"><select value={q.qType || 'mcq'} onChange={(e) => updateQuizQuestion(i, qIndex, 'qType', e.target.value)} className="w-1/3 p-3 border border-gray-300 rounded outline-none font-bold text-sm"><option value="mcq">⭕ Multiple Choice</option><option value="short">✏️ Short Text</option><option value="long">📄 Long Text</option></select><input placeholder="Question prompt..." value={q.question} onChange={(e) => updateQuizQuestion(i, qIndex, 'question', e.target.value)} className="w-2/3 p-3 border border-gray-300 rounded outline-none font-bold text-sm" /></div>{(!q.qType || q.qType === 'mcq') && (<><div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">{[0, 1, 2, 3].map((oIdx) => (<input key={oIdx} placeholder={`Option ${oIdx + 1}`} value={q.options[oIdx] || ""} onChange={(e) => updateQuizOption(i, qIndex, oIdx, e.target.value)} className="p-2 border border-gray-300 rounded text-sm outline-none" />))}</div><select value={q.answer} onChange={(e) => updateQuizQuestion(i, qIndex, 'answer', e.target.value)} className="w-full p-2.5 border border-brand-purple/50 bg-brand-purple/5 rounded text-sm font-bold text-brand-darkPurple outline-none"><option value="">Select CORRECT answer...</option>{q.options.map((opt: string, oIndex: number) => opt && <option key={oIndex} value={opt}>{opt}</option>)}</select></>)}</div>))}</div>)}{chapter.type !== 'quiz' && chapter.type !== 'text' && (<div className="ml-11 flex items-center gap-4 bg-white p-4 rounded-lg border-2 border-dashed border-gray-300">{chapter.isUploading ? <span className="text-brand-purple font-bold text-sm">⏳ Uploading...</span> : chapter.fileUrl ? <span className="text-brand-success font-bold text-sm truncate">✓ attached</span> : (<><span className="flex-1 text-sm text-gray-500 font-bold">Attach file:</span><label className="cursor-pointer bg-brand-purple/10 px-4 py-2 rounded-md text-sm font-bold text-brand-purple hover:bg-brand-purple/20 transition whitespace-nowrap">☁️ Choose File<input type="file" className="hidden" onChange={(e) => handleFileUpload(i, e)} /></label></>)}</div>)}</div>))}</div></div></div><div className="space-y-6"><div className="bg-brand-darkPurple p-6 rounded-xl shadow-lg text-white sticky top-8 h-fit"><h2 className="text-lg font-bold mb-6 text-brand-yellow">Publish Course</h2><button onClick={handleSaveCourse} disabled={isSaving || chapters.some(c => c.isUploading)} className="w-full bg-brand-yellow text-brand-darkPurple font-bold py-3.5 rounded-lg hover:bg-brand-lightYellow transition disabled:opacity-50">Save & Publish &rarr;</button></div><div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h2 className="text-lg font-bold text-brand-purple mb-4 border-b border-gray-100 pb-4">🗑️ Live Courses</h2>{existingCourses.length === 0 ? <p className="text-gray-500 font-bold">No courses published.</p> : (<div className="space-y-2">{existingCourses.map(c => (<div key={c.id} className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0"><span className="text-sm font-bold text-brand-darkGrey truncate pr-4">{c.title}</span><button onClick={() => handleDeleteCourse(c.id, c.title)} className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold hover:bg-red-200 transition">Delete</button></div>))}</div>)}</div></div></div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8"><div className="lg:col-span-2 space-y-6"><div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h2 className="text-lg font-bold text-brand-purple mb-4">Course Details</h2><input type="text" value={courseTitle} onChange={(e) => setCourseTitle(e.target.value)} placeholder="Course Title..." className="w-full border border-gray-300 rounded-lg p-3 mb-6 outline-none focus:border-brand-purple font-bold text-lg" /><h3 className="text-sm font-bold text-gray-700 mb-2">Course Dashboard Thumbnail</h3><div className="flex items-center gap-4">{thumbnailUrl ? <img src={thumbnailUrl} className="w-24 h-16 object-cover rounded border border-gray-200" alt="thumb" /> : <div className="w-24 h-16 bg-gray-100 border border-gray-200 rounded flex items-center justify-center text-xs font-bold text-gray-400">No Img</div>}<label className="cursor-pointer bg-brand-lightYellow/30 border border-brand-yellow px-4 py-2 rounded-lg text-sm font-bold text-brand-darkPurple hover:bg-brand-lightYellow transition">Upload Thumbnail Image<input type="file" accept="image/*" className="hidden" onChange={handleThumbUpload} disabled={isUploadingThumb}/></label></div></div><div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><div className="flex justify-between items-center mb-6"><h2 className="text-lg font-bold text-brand-purple">Curriculum Builder</h2><button onClick={addChapter} className="bg-brand-yellow text-brand-darkPurple px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-brand-lightYellow">+ Add Module</button></div><div className="space-y-6">{chapters.map((chapter, i) => (<div key={chapter.id} className="bg-gray-50 p-5 border border-gray-200 rounded-lg space-y-4 shadow-sm relative group"><div className="flex items-center gap-3 flex-wrap"><span className="w-8 h-8 flex items-center justify-center bg-brand-darkPurple text-white rounded font-bold shrink-0 shadow-sm">{i + 1}</span>
+                    <input type="text" value={chapter.title} onChange={(e) => { const n = [...chapters]; n[i].title = e.target.value; setChapters(n); }} placeholder="Module Title..." className="flex-1 border border-gray-300 p-2.5 rounded-lg outline-none focus:border-brand-purple bg-white font-bold min-w-[150px]" />
+                    <select value={chapter.type} onChange={(e) => { const n = [...chapters]; n[i].type = e.target.value; setChapters(n); }} className="border border-gray-300 p-2.5 rounded-lg outline-none focus:border-brand-purple bg-white text-sm font-bold text-gray-600"><option value="text">📝 Text Only</option><option value="video">🎥 Video</option><option value="pdf">📄 PDF</option><option value="scorm">📦 SCORM</option><option value="quiz">❓ Quiz</option></select>
+                    
+                    {/* NEW: SUB-CHAPTER CHECKBOX */}
+                    <label className="flex items-center gap-2 cursor-pointer bg-white px-3 py-2 rounded-lg border border-gray-300 text-sm font-bold text-gray-600 hover:border-brand-purple">
+                      <input type="checkbox" checked={chapter.isSubChapter || false} onChange={(e) => { const n = [...chapters]; n[i].isSubChapter = e.target.checked; setChapters(n); }} className="w-4 h-4 accent-brand-purple cursor-pointer" />
+                      Is Sub-Chapter
+                    </label>
+
+                    <button onClick={() => removeChapter(chapter.id)} className="text-red-400 font-bold px-2 text-2xl hover:text-red-600">&times;</button></div><div className="ml-11"><textarea value={chapter.textContent || ""} onChange={(e) => { const n = [...chapters]; n[i].textContent = e.target.value; setChapters(n); }} placeholder={chapter.type === 'text' ? "Type your course content here..." : "Add context, instructions, or body text..."} className="w-full border border-gray-300 rounded-lg p-3 text-sm min-h-[100px] outline-none focus:border-brand-purple bg-white resize-y" /></div>{chapter.type === 'quiz' && (<div className="ml-11 bg-brand-lightYellow/10 p-5 rounded-lg border-2 border-brand-yellow/50"><div className="flex justify-between items-center mb-4"><h4 className="font-bold text-brand-darkPurple text-sm uppercase tracking-wider">📝 Questions</h4><button onClick={() => addQuizQuestion(i)} className="text-xs bg-brand-yellow text-brand-darkPurple px-3 py-1.5 rounded font-bold shadow-sm hover:bg-brand-lightYellow">+ Add Q</button></div>{chapter.questions?.map((q: any, qIndex: number) => (<div key={qIndex} className="bg-white p-4 border border-gray-200 rounded-lg relative shadow-sm mb-4"><button onClick={() => removeQuizQuestion(i, qIndex)} className="absolute -top-3 -right-3 bg-white text-red-500 border border-gray-200 rounded-full w-6 h-6 flex items-center justify-center font-bold shadow-sm">&times;</button><div className="flex gap-3 mb-3"><select value={q.qType || 'mcq'} onChange={(e) => updateQuizQuestion(i, qIndex, 'qType', e.target.value)} className="w-1/3 p-3 border border-gray-300 rounded outline-none font-bold text-sm"><option value="mcq">⭕ Multiple Choice</option><option value="short">✏️ Short Text</option><option value="long">📄 Long Text</option></select><input placeholder="Question prompt..." value={q.question} onChange={(e) => updateQuizQuestion(i, qIndex, 'question', e.target.value)} className="w-2/3 p-3 border border-gray-300 rounded outline-none font-bold text-sm" /></div>{(!q.qType || q.qType === 'mcq') && (<><div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">{[0, 1, 2, 3].map((oIdx) => (<input key={oIdx} placeholder={`Option ${oIdx + 1}`} value={q.options[oIdx] || ""} onChange={(e) => updateQuizOption(i, qIndex, oIdx, e.target.value)} className="p-2 border border-gray-300 rounded text-sm outline-none" />))}</div><select value={q.answer} onChange={(e) => updateQuizQuestion(i, qIndex, 'answer', e.target.value)} className="w-full p-2.5 border border-brand-purple/50 bg-brand-purple/5 rounded text-sm font-bold text-brand-darkPurple outline-none"><option value="">Select CORRECT answer...</option>{q.options.map((opt: string, oIndex: number) => opt && <option key={oIndex} value={opt}>{opt}</option>)}</select></>)}</div>))}</div>)}{chapter.type !== 'quiz' && chapter.type !== 'text' && (<div className="ml-11 flex items-center gap-4 bg-white p-4 rounded-lg border-2 border-dashed border-gray-300">{chapter.isUploading ? <span className="text-brand-purple font-bold text-sm animate-pulse">⏳ {chapter.uploadStatus || "Uploading..."}</span> : chapter.fileUrl ? <span className="text-brand-success font-bold text-sm truncate">✓ attached</span> : (<><span className="flex-1 text-sm text-gray-500 font-bold">Attach file:</span><label className="cursor-pointer bg-brand-purple/10 px-4 py-2 rounded-md text-sm font-bold text-brand-purple hover:bg-brand-purple/20 transition whitespace-nowrap">☁️ Choose File<input type="file" className="hidden" accept={chapter.type === 'scorm' ? '.zip' : undefined} onChange={(e) => handleFileUpload(i, e)} /></label></>)}</div>)}</div>))}</div></div></div><div className="space-y-6"><div className="bg-brand-darkPurple p-6 rounded-xl shadow-lg text-white sticky top-8 h-fit"><h2 className="text-lg font-bold mb-6 text-brand-yellow">Publish Course</h2><button onClick={handleSaveCourse} disabled={isSaving || chapters.some(c => c.isUploading)} className="w-full bg-brand-yellow text-brand-darkPurple font-bold py-3.5 rounded-lg hover:bg-brand-lightYellow transition disabled:opacity-50">Save & Publish &rarr;</button></div><div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h2 className="text-lg font-bold text-brand-purple mb-4 border-b border-gray-100 pb-4">🗑️ Live Courses</h2>{existingCourses.length === 0 ? <p className="text-gray-500 font-bold">No courses published.</p> : (<div className="space-y-2">{existingCourses.map(c => (<div key={c.id} className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0"><span className="text-sm font-bold text-brand-darkGrey truncate pr-4">{c.title}</span><button onClick={() => handleDeleteCourse(c.id, c.title)} className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold hover:bg-red-200 transition">Delete</button></div>))}</div>)}</div></div></div>
       )}
     </div>
   );
