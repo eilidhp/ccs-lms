@@ -31,7 +31,6 @@ export default function CoursePlayer() {
       const { data: c } = await supabase.from('courses').select('*').eq('id', params.id).single();
       if (c) setCourse(c);
 
-      // GUARANTEED PROGRESS FETCH
       const { data: prog } = await supabase.from('course_progress').select('*').match({ user_email: email, course_id: params.id }).maybeSingle();
       if (prog) setCompletedChapters(prog.completed_chapters || []);
 
@@ -72,7 +71,6 @@ export default function CoursePlayer() {
     const newCompleted = Array.from(new Set([...completedChapters, activeChapterIndex]));
     setCompletedChapters(newCompleted);
     
-    // GUARANTEED PROGRESS UPDATE (Using specific ID to prevent database errors)
     const { data: existing } = await supabase.from('course_progress').select('id').match({ user_email: userEmail, course_id: course.id }).maybeSingle();
     
     if (existing) {
@@ -95,7 +93,15 @@ export default function CoursePlayer() {
     switch (currentChapter.type) {
       case 'video': return <div className="w-full aspect-video bg-black rounded-xl overflow-hidden shadow-lg border border-gray-200 mb-8"><video controls className="w-full h-full object-contain" src={currentChapter.fileUrl} controlsList="nodownload">Error</video></div>;
       case 'pdf': return <div className="w-full h-[600px] rounded-xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 mb-8"><iframe src={`${currentChapter.fileUrl}#toolbar=0`} className="w-full h-full" /></div>;
-      case 'scorm': return <div className="absolute inset-0 w-full h-full flex flex-col"><div className="w-full h-8 bg-brand-darkPurple text-center text-[10px] font-bold text-brand-yellow uppercase tracking-widest flex items-center justify-center z-10 shrink-0 pointer-events-none">📦 SCORM Module Running</div><iframe src={currentChapter.fileUrl} className="w-full flex-1 border-0 bg-white" allowFullScreen /></div>;
+      
+      // 🧠 FIXED SCORM UI: Padded gray background, minimal white box, and no header text!
+      case 'scorm': return (
+        <div className="absolute inset-0 w-full h-full p-4 lg:p-6 bg-gray-50 flex flex-col">
+          <div className="flex-1 w-full h-full bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden relative">
+            <iframe src={currentChapter.fileUrl} className="absolute inset-0 w-full h-full border-0 bg-white" allowFullScreen />
+          </div>
+        </div>
+      );
       default: return null;
     }
   };
@@ -114,7 +120,6 @@ export default function CoursePlayer() {
              {course.chapters?.map((chapter: any, index: number) => {
                const isLocked = index > maxAllowedIndex;
                const isCompleted = completedChapters.includes(index);
-               // NEW SUB-CHAPTER INDENTATION UI
                const indentClass = chapter.isSubChapter ? "ml-6 text-sm border-l-4 border-l-brand-purple/30 bg-white shadow-sm" : "";
                return (
                  <li key={chapter.id || index} onClick={() => !isLocked && setActiveChapterIndex(index)} className={`p-3 font-bold rounded-lg border transition-all flex items-center gap-3 ${indentClass} ${isLocked ? 'opacity-50 cursor-not-allowed bg-gray-100 border-gray-200' : index === activeChapterIndex ? "bg-brand-purple/10 text-brand-purple border-brand-purple shadow-sm cursor-pointer" : "text-gray-500 hover:bg-gray-200 border-transparent cursor-pointer"}`}>
@@ -130,9 +135,8 @@ export default function CoursePlayer() {
       <main className="flex-1 flex flex-col min-w-0 bg-gray-50/30 overflow-hidden relative">
         <header className="h-16 border-b border-gray-200 flex items-center justify-between px-6 bg-white shrink-0 shadow-sm z-10"><button onClick={() => setSidebarOpen(!sidebarOpen)} className="text-brand-darkGrey font-bold text-sm hover:text-brand-purple">☰ {sidebarOpen ? "Minimise Menu" : "Table of Contents"}</button></header>
         
-        {/* NEW FULL SCREEN SCORM WRAPPER */}
         {isScorm ? (
-          <div className="flex-1 w-full h-full bg-white relative flex flex-col">
+          <div className="flex-1 w-full h-full relative flex flex-col bg-gray-50">
             {renderMediaContent()}
           </div>
         ) : (
@@ -157,13 +161,14 @@ export default function CoursePlayer() {
           </div>
         )}
 
-        {currentChapter.type !== 'quiz' && !isCurrentlyCompleted && (
+        {/* BOTTOM ACTION BAR - Remains pinned at bottom for normal content! */}
+        {!isScorm && currentChapter.type !== 'quiz' && !isCurrentlyCompleted && (
           <div className="bg-white border-t border-gray-200 p-6 px-8 lg:px-12 flex justify-end shrink-0 z-10 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] relative z-20">
             <button onClick={() => setShowQuestion(true)} className="bg-brand-purple text-white px-8 py-3.5 rounded-full font-bold text-lg hover:-translate-y-1 transition border-2 border-brand-darkPurple hover:bg-brand-darkPurple cursor-pointer shadow-md">Complete Module &rarr;</button>
           </div>
         )}
 
-        {currentChapter.type !== 'quiz' && isCurrentlyCompleted && activeChapterIndex < (course.chapters?.length || 0) - 1 && (
+        {!isScorm && currentChapter.type !== 'quiz' && isCurrentlyCompleted && activeChapterIndex < (course.chapters?.length || 0) - 1 && (
            <div className="bg-white border-t border-gray-200 p-6 px-8 lg:px-12 flex justify-end shrink-0 z-10 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] relative z-20">
              <button onClick={() => setActiveChapterIndex(activeChapterIndex + 1)} className="bg-gray-800 text-white px-8 py-3.5 rounded-full font-bold text-lg hover:-translate-y-1 transition border-2 border-black hover:bg-black cursor-pointer shadow-md">Next Module &rarr;</button>
            </div>

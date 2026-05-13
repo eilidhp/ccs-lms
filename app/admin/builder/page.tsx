@@ -4,20 +4,23 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import JSZip from "jszip"; 
 
+// 🧠 FIXED: We strictly enforce UTF-8 HTML so Supabase renders it as an interactive website!
 const getMimeType = (filename: string) => {
   const ext = filename.split('.').pop()?.toLowerCase();
   switch (ext) {
-    case 'html': case 'htm': return 'text/html';
-    case 'css': return 'text/css';
-    case 'js': return 'application/javascript';
+    case 'html': case 'htm': return 'text/html; charset=utf-8';
+    case 'css': return 'text/css; charset=utf-8';
+    case 'js': return 'application/javascript; charset=utf-8';
     case 'png': return 'image/png';
     case 'jpg': case 'jpeg': return 'image/jpeg';
     case 'gif': return 'image/gif';
     case 'svg': return 'image/svg+xml';
-    case 'json': return 'application/json';
+    case 'json': return 'application/json; charset=utf-8';
     case 'mp4': return 'video/mp4';
     case 'mp3': return 'audio/mpeg';
     case 'woff': case 'woff2': return 'font/woff2';
+    case 'ttf': return 'font/ttf';
+    case 'eot': return 'application/vnd.ms-fontobject';
     default: return 'application/octet-stream';
   }
 };
@@ -85,10 +88,8 @@ export default function InstructorPortal() {
         const uniqueId = `scorm-${Date.now()}`;
         
         const fileNames = Object.keys(loadedZip.files);
-        // Exclude Mac hidden files and directories
         const validFiles = fileNames.filter(f => !f.includes("__MACOSX") && !f.startsWith(".") && !loadedZip.files[f].dir);
         
-        // Match the SCORM starting file accurately
         const lowerNames = validFiles.map(f => f.toLowerCase());
         let mainFile = validFiles.find(f => f.toLowerCase().endsWith('story.html')) ||
                        validFiles.find(f => f.toLowerCase().endsWith('scormdriver/indexapi.html')) ||
@@ -102,8 +103,9 @@ export default function InstructorPortal() {
         for (let i = 0; i < validFiles.length; i += batchSize) {
           const batch = validFiles.slice(i, i + batchSize);
           await Promise.all(batch.map(async (filename) => {
-            const blob = await loadedZip.files[filename].async("blob");
-            await supabase.storage.from('course-content').upload(`${uniqueId}/${filename}`, blob, { contentType: getMimeType(filename), upsert: true });
+            // 🧠 FIXED: We strictly convert the file to raw ArrayBuffer data so Supabase correctly accepts the MIME type
+            const fileData = await loadedZip.files[filename].async("arraybuffer");
+            await supabase.storage.from('course-content').upload(`${uniqueId}/${filename}`, fileData, { contentType: getMimeType(filename), upsert: true });
           }));
           uploadedCount += batch.length;
           const progChapters = [...chapters];
@@ -191,7 +193,6 @@ export default function InstructorPortal() {
                     <input type="text" value={chapter.title} onChange={(e) => { const n = [...chapters]; n[i].title = e.target.value; setChapters(n); }} placeholder="Module Title..." className="flex-1 border border-gray-300 p-2.5 rounded-lg outline-none focus:border-brand-purple bg-white font-bold min-w-[150px]" />
                     <select value={chapter.type} onChange={(e) => { const n = [...chapters]; n[i].type = e.target.value; setChapters(n); }} className="border border-gray-300 p-2.5 rounded-lg outline-none focus:border-brand-purple bg-white text-sm font-bold text-gray-600"><option value="text">📝 Text Only</option><option value="video">🎥 Video</option><option value="pdf">📄 PDF</option><option value="scorm">📦 SCORM</option><option value="quiz">❓ Quiz</option></select>
                     
-                    {/* NEW: SUB-CHAPTER CHECKBOX */}
                     <label className="flex items-center gap-2 cursor-pointer bg-white px-3 py-2 rounded-lg border border-gray-300 text-sm font-bold text-gray-600 hover:border-brand-purple">
                       <input type="checkbox" checked={chapter.isSubChapter || false} onChange={(e) => { const n = [...chapters]; n[i].isSubChapter = e.target.checked; setChapters(n); }} className="w-4 h-4 accent-brand-purple cursor-pointer" /> Is Sub-Chapter
                     </label>
