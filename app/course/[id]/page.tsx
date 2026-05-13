@@ -85,6 +85,15 @@ export default function CoursePlayer() {
 
   const isScorm = currentChapter.type === 'scorm';
 
+  // 🧠 PROXY INTERCEPTOR: Routes SCORM files through our new middleman!
+  let scormUrl = currentChapter.fileUrl || "";
+  if (isScorm && scormUrl.includes('supabase.co')) {
+    const parts = scormUrl.split('course-content/');
+    if (parts.length > 1) {
+      scormUrl = `/api/scorm/${parts[1]}`;
+    }
+  }
+
   const renderMediaContent = () => {
     if (currentChapter.type === 'text') return null; 
     if (currentChapter.type === 'quiz') return <div className="w-full mb-8 max-w-4xl mx-auto"><QuizEngine onPass={handleNextModule} questions={currentChapter.questions || []} userEmail={userEmail} courseId={course.id} courseTitle={course.title} chapterTitle={currentChapter.title} /></div>;
@@ -93,15 +102,6 @@ export default function CoursePlayer() {
     switch (currentChapter.type) {
       case 'video': return <div className="w-full aspect-video bg-black rounded-xl overflow-hidden shadow-lg border border-gray-200 mb-8"><video controls className="w-full h-full object-contain" src={currentChapter.fileUrl} controlsList="nodownload">Error</video></div>;
       case 'pdf': return <div className="w-full h-[600px] rounded-xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 mb-8"><iframe src={`${currentChapter.fileUrl}#toolbar=0`} className="w-full h-full" /></div>;
-      
-      // 🧠 FIXED SCORM UI: Padded gray background, minimal white box, and no header text!
-      case 'scorm': return (
-        <div className="absolute inset-0 w-full h-full p-4 lg:p-6 bg-gray-50 flex flex-col">
-          <div className="flex-1 w-full h-full bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden relative">
-            <iframe src={currentChapter.fileUrl} className="absolute inset-0 w-full h-full border-0 bg-white" allowFullScreen />
-          </div>
-        </div>
-      );
       default: return null;
     }
   };
@@ -136,8 +136,20 @@ export default function CoursePlayer() {
         <header className="h-16 border-b border-gray-200 flex items-center justify-between px-6 bg-white shrink-0 shadow-sm z-10"><button onClick={() => setSidebarOpen(!sidebarOpen)} className="text-brand-darkGrey font-bold text-sm hover:text-brand-purple">☰ {sidebarOpen ? "Minimise Menu" : "Table of Contents"}</button></header>
         
         {isScorm ? (
-          <div className="flex-1 w-full h-full relative flex flex-col bg-gray-50">
-            {renderMediaContent()}
+          <div className="flex-1 w-full h-full bg-gray-50 p-4 lg:p-8 flex flex-col gap-6 relative overflow-hidden">
+            
+            {/* 🎨 FIXED SCORM UI: The minimal white border frame without the banner! */}
+            <div className="flex-1 w-full bg-white rounded-2xl shadow-sm border border-gray-200 p-2 flex flex-col min-h-0">
+              <iframe src={scormUrl} className="flex-1 w-full h-full border-0 rounded-xl bg-white" allowFullScreen />
+            </div>
+            
+            <div className="flex justify-end shrink-0">
+              {!isCurrentlyCompleted ? (
+                <button onClick={() => setShowQuestion(true)} className="bg-brand-purple text-white px-8 py-3.5 rounded-full font-bold text-lg hover:-translate-y-1 transition shadow-md">Complete Module &rarr;</button>
+              ) : activeChapterIndex < (course.chapters?.length || 0) - 1 ? (
+                <button onClick={() => setActiveChapterIndex(activeChapterIndex + 1)} className="bg-gray-800 text-white px-8 py-3.5 rounded-full font-bold text-lg hover:-translate-y-1 transition shadow-md">Next Module &rarr;</button>
+              ) : null}
+            </div>
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto p-8 lg:p-12">
