@@ -62,6 +62,16 @@ export default function InstructorPortal() {
   const handleDeleteCourse = async (id: number, title: string) => { if (window.confirm(`🚨 Delete "${title}"?`)) { await supabase.from('courses').delete().eq('id', id); fetchAdminData(); } };
   const handleRemoveUser = async (email: string, name: string) => { if (window.confirm(`🚨 WARNING: Are you sure you want to remove ${name || email}? This cannot be undone.`)) { await supabase.from('profiles').delete().eq('email', email); fetchAdminData(); setExpandedUser(null); } };
 
+  // 🧠 THE MISSING FUNCTION! This safely loads the course back into the builder.
+  const handleEditCourse = (course: any) => {
+    setEditingCourseId(course.id);
+    setCourseTitle(course.title);
+    setThumbnailUrl(course.thumbnail_url || "");
+    setChapters(course.chapters?.length ? course.chapters : [{ id: 1, title: "", isSubChapter: false, textContent: "", type: "text", fileUrl: "", fileName: "", isUploading: false, uploadStatus: "", questions: [] }]);
+    setActiveTab("builder");
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const handleThumbUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return; setIsUploadingThumb(true);
     const safeName = `thumb-${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
@@ -177,17 +187,15 @@ export default function InstructorPortal() {
                     <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Course Access Selection:</h4>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">{existingCourses.map(course => { const isEnrolled = enrollments.some(e => e.user_email === user.email && e.course_id === course.id); return (<label key={course.id} className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${isEnrolled ? "bg-brand-success/10 border-brand-success" : "bg-white border-gray-300 hover:border-brand-purple"}`}><input type="checkbox" checked={isEnrolled} onChange={() => toggleEnrollment(user.email, course.id, isEnrolled)} className="w-5 h-5 accent-brand-success rounded cursor-pointer" /><span className={`font-bold text-sm truncate ${isEnrolled ? "text-brand-success" : "text-gray-600"}`}>{course.title}</span></label>); })}</div>
                     
-                    {/* 🧠 INSTRUCTOR PUSH REMINDER TOOL */}
                     <div className="pt-4 border-t border-gray-200">
                       <h4 className="text-xs font-bold text-brand-purple uppercase tracking-wider mb-3">📅 Push Calendar Reminder to User</h4>
                       <div className="flex flex-col sm:flex-row gap-3">
                         <input type="text" value={remTitle} onChange={e => setRemTitle(e.target.value)} placeholder="e.g. Please finish Module 1" className="flex-1 border border-gray-300 rounded-lg p-2.5 text-sm font-bold outline-none focus:border-brand-purple" />
-                        <input type="datetime-local" value={remDate} onChange={e => setRemDate(e.target.value)} className="border border-gray-300 rounded-lg p-2.5 text-sm font-bold outline-none focus:border-brand-purple text-gray-500" />
+                        <input type="date" value={remDate} onChange={e => setRemDate(e.target.value)} className="border border-gray-300 rounded-lg p-2.5 text-sm font-bold outline-none focus:border-brand-purple text-gray-500 w-40" />
                         <button onClick={async () => {
-                          if(!remTitle) return alert('Enter a title');
-                          // Assumes your table uses 'title' and 'due_date'. Change these if you named them differently!
-                          const {error} = await supabase.from('reminders').insert([{ user_email: user.email, title: remTitle, due_date: remDate || null }]); 
-                          if(!error) { alert('Reminder sent!'); setRemTitle(''); setRemDate(''); } else { alert(error.message) }
+                          if(!remTitle || !remDate) return alert('Enter a title and date!');
+                          const {error} = await supabase.from('calendar_events').insert([{ user_email: user.email, title: remTitle, event_date: remDate, link_url: "" }]); 
+                          if(!error) { alert('Reminder sent!'); setRemTitle(''); setRemDate(''); fetchAdminData(); } else { alert(error.message) }
                         }} className="bg-brand-purple text-white px-6 py-2.5 rounded-lg text-sm font-bold hover:bg-brand-darkPurple transition shadow-sm whitespace-nowrap">Send Reminder &rarr;</button>
                       </div>
                     </div>
@@ -211,7 +219,6 @@ export default function InstructorPortal() {
       {activeTab === "builder" && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8"><div className="lg:col-span-2 space-y-6"><div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
           
-          {/* 🧠 DYNAMIC HEADER */}
           <h2 className="text-lg font-bold text-brand-purple mb-4">{editingCourseId ? "✏️ Editing Existing Course" : "Course Details"}</h2>
           
           <input type="text" value={courseTitle} onChange={(e) => setCourseTitle(e.target.value)} placeholder="Course Title..." className="w-full border border-gray-300 rounded-lg p-3 mb-6 outline-none focus:border-brand-purple font-bold text-lg" /><h3 className="text-sm font-bold text-gray-700 mb-2">Course Dashboard Thumbnail</h3><div className="flex items-center gap-4">{thumbnailUrl ? <img src={thumbnailUrl} className="w-24 h-16 object-cover rounded border border-gray-200" alt="thumb" /> : <div className="w-24 h-16 bg-gray-100 border border-gray-200 rounded flex items-center justify-center text-xs font-bold text-gray-400">No Img</div>}<label className="cursor-pointer bg-brand-lightYellow/30 border border-brand-yellow px-4 py-2 rounded-lg text-sm font-bold text-brand-darkPurple hover:bg-brand-lightYellow transition">Upload Thumbnail Image<input type="file" accept="image/*" className="hidden" onChange={handleThumbUpload} disabled={isUploadingThumb}/></label></div></div><div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><div className="flex justify-between items-center mb-6"><h2 className="text-lg font-bold text-brand-purple">Curriculum Builder</h2><button onClick={addChapter} className="bg-brand-yellow text-brand-darkPurple px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-brand-lightYellow">+ Add Module</button></div><div className="space-y-6">{chapters.map((chapter, i) => (<div key={chapter.id} className="bg-gray-50 p-5 border border-gray-200 rounded-lg space-y-4 shadow-sm relative group"><div className="flex items-center gap-3 flex-wrap"><span className="w-8 h-8 flex items-center justify-center bg-brand-darkPurple text-white rounded font-bold shrink-0 shadow-sm">{i + 1}</span>
@@ -229,12 +236,12 @@ export default function InstructorPortal() {
           {editingCourseId ? "💾 Save Changes" : "Save & Publish \u2192"}
         </button>
         {editingCourseId && (
-          <button onClick={() => { setEditingCourseId(null); setCourseTitle(""); setChapters([{ id: 1, title: "", isSubChapter: false, textContent: "", type: "text", fileUrl: "", fileName: "", isUploading: false, uploadStatus: "", questions: [] }]); }} className="w-full mt-3 bg-white/10 text-white font-bold py-2 rounded-lg hover:bg-white/20 transition">Cancel Edit</button>
+          <button onClick={() => { setEditingCourseId(null); setCourseTitle(""); setThumbnailUrl(""); setChapters([{ id: 1, title: "", isSubChapter: false, textContent: "", type: "text", fileUrl: "", fileName: "", isUploading: false, uploadStatus: "", questions: [] }]); }} className="w-full mt-3 bg-white/10 text-white font-bold py-2 rounded-lg hover:bg-white/20 transition">Cancel Edit</button>
         )}
 
         </div><div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h2 className="text-lg font-bold text-brand-purple mb-4 border-b border-gray-100 pb-4">🗑️ Live Courses</h2>{existingCourses.length === 0 ? <p className="text-gray-500 font-bold">No courses published.</p> : (<div className="space-y-2">{existingCourses.map(c => (<div key={c.id} className="flex flex-col xl:flex-row xl:items-center justify-between py-2 border-b border-gray-100 last:border-0 gap-2"><span className="text-sm font-bold text-brand-darkGrey truncate pr-4">{c.title}</span><div className="flex gap-2 shrink-0">
           
-          {/* 🧠 COURSE EDIT BUTTON */}
+          {/* ✅ THE BUTTON IS NOW SAFE TO USE! */}
           <button onClick={() => handleEditCourse(c)} className="bg-blue-50 text-blue-600 px-3 py-1 rounded text-xs font-bold hover:bg-blue-100 transition border border-blue-200">Edit</button>
           <button onClick={() => handleDeleteCourse(c.id, c.title)} className="bg-red-50 text-red-600 px-3 py-1 rounded text-xs font-bold hover:bg-red-100 transition border border-red-200">Delete</button>
 
