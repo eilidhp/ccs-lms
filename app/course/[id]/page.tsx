@@ -3,7 +3,11 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import QuestionModal from "@/components/QuestionModal";
 import QuizEngine from "@/components/QuizEngine";
+
+// 🧠 Import the Rich Text Editor CSS so the player correctly scales your custom fonts and images!
+import "react-quill/dist/quill.snow.css"; 
 
 export default function CoursePlayer() {
   const params = useParams(); const router = useRouter();
@@ -147,7 +151,16 @@ export default function CoursePlayer() {
           <div className="flex-1 overflow-y-auto p-8 lg:p-12">
             <div className="max-w-4xl mx-auto w-full pb-8">
               <h1 className="text-3xl font-black text-brand-darkPurple mb-6">{currentChapter.title || "Module Content"}</h1>
-              {currentChapter.textContent && <div className="mb-8 p-6 bg-white border border-gray-200 rounded-xl shadow-sm text-gray-700 leading-relaxed text-lg whitespace-pre-wrap">{currentChapter.textContent}</div>}
+              
+              {/* 🧠 SAFELY RENDER RICH TEXT HTML! */}
+              {currentChapter.textContent && (
+                <div className="mb-8 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden ql-snow">
+                  <div 
+                    className="ql-editor p-6 lg:p-10 text-gray-700 text-lg leading-relaxed [&>h1]:text-4xl [&>h1]:font-black [&>h1]:text-brand-darkPurple [&>h1]:mb-6 [&>h2]:text-3xl [&>h2]:font-bold [&>h2]:text-brand-darkPurple [&>h2]:mb-4 [&>h3]:text-2xl [&>h3]:font-bold [&>h3]:mb-3 [&_img]:rounded-xl [&_img]:shadow-md [&_img]:my-8 [&_img]:max-w-full [&_img]:mx-auto [&_p]:mb-4 [&_ul]:mb-4 [&_ol]:mb-4 [&_a]:text-brand-purple [&_a]:font-bold [&_a]:underline" 
+                    dangerouslySetInnerHTML={{ __html: currentChapter.textContent }} 
+                  />
+                </div>
+              )}
               
               {renderMediaContent()}
               
@@ -177,7 +190,6 @@ export default function CoursePlayer() {
            </div>
         )}
         
-        {/* ✨ THE NEW BESPOKE CONFIRMATION MODAL */}
         {showQuestion && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center border border-gray-100 animate-in fade-in zoom-in duration-200">

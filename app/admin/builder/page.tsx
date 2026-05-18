@@ -1,8 +1,71 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import JSZip from "jszip"; 
+import dynamic from 'next/dynamic';
+import 'react-quill/dist/quill.snow.css'; // 🎨 The Rich Text Styles!
+
+// 🧠 DYNAMIC IMPORT: Safely loads the Rich Text Editor without breaking Next.js!
+const ReactQuill = dynamic(() => import('react-quill'), { ssr: false });
+
+// 🧠 OUR CUSTOM RICH TEXT EDITOR WITH SUPABASE IMAGE UPLOADS
+function RichEditor({ value, onChange }: { value: string, onChange: (val: string) => void }) {
+  const quillRef = useRef<any>(null);
+
+  const imageHandler = () => {
+    const input = document.createElement('input');
+    input.setAttribute('type', 'file');
+    input.setAttribute('accept', 'image/*');
+    input.click();
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      
+      const quill = quillRef.current?.getEditor();
+      if (!quill) return;
+      
+      const range = quill.getSelection(true) || { index: 0 };
+      quill.insertText(range.index, '⏳ Uploading image...', 'bold', true);
+      
+      const safeName = `inline-img-${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+      const { error } = await supabase.storage.from('course-content').upload(safeName, file);
+      
+      quill.deleteText(range.index, 21); // Removes the "Uploading image..." text
+      
+      if (error) { alert("Image upload failed: " + error.message); return; }
+      const url = supabase.storage.from('course-content').getPublicUrl(safeName).data.publicUrl;
+      
+      quill.insertEmbed(range.index, 'image', url);
+    };
+  };
+
+  const modules = useMemo(() => ({
+    toolbar: {
+      container: [
+        [{ 'header': [1, 2, 3, false] }],
+        [{ 'size': ['small', false, 'large', 'huge'] }],
+        ['bold', 'italic', 'underline', 'strike'],
+        [{ 'color': [] }, { 'background': [] }],
+        [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+        ['link', 'image'],
+        ['clean']
+      ],
+      handlers: { image: imageHandler }
+    }
+  }), []);
+
+  return (
+    <div className="border border-gray-300 rounded-lg overflow-hidden shadow-sm">
+      <style dangerouslySetInnerHTML={{__html: `
+        .ql-editor { min-height: 180px; font-size: 16px; line-height: 1.6; }
+        .ql-toolbar.ql-snow { border: none; border-bottom: 1px solid #e5e7eb; background: #f9fafb; }
+        .ql-container.ql-snow { border: none; }
+      `}} />
+      <ReactQuill ref={quillRef} theme="snow" value={value || ""} onChange={onChange} modules={modules} className="bg-white" placeholder="Type your beautiful course content here..." />
+    </div>
+  );
+}
 
 const getMimeType = (filename: string) => {
   const ext = filename.split('.').pop()?.toLowerCase();
@@ -22,16 +85,16 @@ export default function InstructorPortal() {
   const [activeTab, setActiveTab] = useState("builder");
   const [isSaving, setIsSaving] = useState(false);
   
-  // 🧠 COURSE EDITING STATE
   const [editingCourseId, setEditingCourseId] = useState<number | null>(null);
   const [courseTitle, setCourseTitle] = useState("");
   const [thumbnailUrl, setThumbnailUrl] = useState("");
   const [isUploadingThumb, setIsUploadingThumb] = useState(false);
   const [chapters, setChapters] = useState<any[]>([{ id: 1, title: "", isSubChapter: false, textContent: "", type: "text", fileUrl: "", fileName: "", isUploading: false, uploadStatus: "", questions: [] }]);
   
-  // 🧠 REMINDER PUSH STATE
+  // 🧠 REMINDER PUSH STATE (NOW INCLUDES LINK)
   const [remTitle, setRemTitle] = useState("");
   const [remDate, setRemDate] = useState("");
+  const [remLink, setRemLink] = useState("");
 
   const [existingCourses, setExistingCourses] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
@@ -62,7 +125,6 @@ export default function InstructorPortal() {
   const handleDeleteCourse = async (id: number, title: string) => { if (window.confirm(`🚨 Delete "${title}"?`)) { await supabase.from('courses').delete().eq('id', id); fetchAdminData(); } };
   const handleRemoveUser = async (email: string, name: string) => { if (window.confirm(`🚨 WARNING: Are you sure you want to remove ${name || email}? This cannot be undone.`)) { await supabase.from('profiles').delete().eq('email', email); fetchAdminData(); setExpandedUser(null); } };
 
-  // 🧠 THE MISSING FUNCTION! This safely loads the course back into the builder.
   const handleEditCourse = (course: any) => {
     setEditingCourseId(course.id);
     setCourseTitle(course.title);
@@ -132,7 +194,6 @@ export default function InstructorPortal() {
     if (!courseTitle) { alert("Enter a title!"); return; } setIsSaving(true);
     const chaptersToSave = chapters.map(({ isUploading, uploadStatus, ...rest }) => rest);
     
-    // 🧠 SMART SAVE: Use Update if Editing, Insert if New!
     let error;
     if (editingCourseId) {
       const { error: err } = await supabase.from('courses').update({ title: courseTitle, thumbnail_url: thumbnailUrl, chapters: chaptersToSave }).eq('id', editingCourseId);
@@ -148,9 +209,7 @@ export default function InstructorPortal() {
       setCourseTitle(""); setThumbnailUrl(""); setEditingCourseId(null);
       setChapters([{ id: 1, title: "", isSubChapter: false, textContent: "", type: "text", fileUrl: "", fileName: "", isUploading: false, uploadStatus: "", questions: [] }]); 
       fetchAdminData(); 
-    } else {
-      alert("Error saving course: " + error.message);
-    }
+    } else { alert("Error saving course: " + error.message); }
   };
 
   const filteredUsers = users.filter(u => u.email.toLowerCase().includes(searchQuery.toLowerCase()) || (u.full_name && u.full_name.toLowerCase().includes(searchQuery.toLowerCase())));
@@ -187,16 +246,22 @@ export default function InstructorPortal() {
                     <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Course Access Selection:</h4>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">{existingCourses.map(course => { const isEnrolled = enrollments.some(e => e.user_email === user.email && e.course_id === course.id); return (<label key={course.id} className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${isEnrolled ? "bg-brand-success/10 border-brand-success" : "bg-white border-gray-300 hover:border-brand-purple"}`}><input type="checkbox" checked={isEnrolled} onChange={() => toggleEnrollment(user.email, course.id, isEnrolled)} className="w-5 h-5 accent-brand-success rounded cursor-pointer" /><span className={`font-bold text-sm truncate ${isEnrolled ? "text-brand-success" : "text-gray-600"}`}>{course.title}</span></label>); })}</div>
                     
+                    {/* 📅 UPDATED INSTRUCTOR PUSH REMINDER TOOL (NOW WITH URL) */}
                     <div className="pt-4 border-t border-gray-200">
                       <h4 className="text-xs font-bold text-brand-purple uppercase tracking-wider mb-3">📅 Push Calendar Reminder to User</h4>
-                      <div className="flex flex-col sm:flex-row gap-3">
-                        <input type="text" value={remTitle} onChange={e => setRemTitle(e.target.value)} placeholder="e.g. Please finish Module 1" className="flex-1 border border-gray-300 rounded-lg p-2.5 text-sm font-bold outline-none focus:border-brand-purple" />
-                        <input type="date" value={remDate} onChange={e => setRemDate(e.target.value)} className="border border-gray-300 rounded-lg p-2.5 text-sm font-bold outline-none focus:border-brand-purple text-gray-500 w-40" />
-                        <button onClick={async () => {
-                          if(!remTitle || !remDate) return alert('Enter a title and date!');
-                          const {error} = await supabase.from('calendar_events').insert([{ user_email: user.email, title: remTitle, event_date: remDate, link_url: "" }]); 
-                          if(!error) { alert('Reminder sent!'); setRemTitle(''); setRemDate(''); fetchAdminData(); } else { alert(error.message) }
-                        }} className="bg-brand-purple text-white px-6 py-2.5 rounded-lg text-sm font-bold hover:bg-brand-darkPurple transition shadow-sm whitespace-nowrap">Send Reminder &rarr;</button>
+                      <div className="flex flex-col gap-3">
+                        <div className="flex flex-col sm:flex-row gap-3">
+                          <input type="text" value={remTitle} onChange={e => setRemTitle(e.target.value)} placeholder="Title (e.g. Finish Module 1)" className="flex-[2] border border-gray-300 rounded-lg p-2.5 text-sm font-bold outline-none focus:border-brand-purple" />
+                          <input type="date" value={remDate} onChange={e => setRemDate(e.target.value)} className="border border-gray-300 rounded-lg p-2.5 text-sm font-bold outline-none focus:border-brand-purple text-gray-500 w-full sm:w-40 shrink-0" />
+                        </div>
+                        <div className="flex flex-col sm:flex-row gap-3">
+                          <input type="text" value={remLink} onChange={e => setRemLink(e.target.value)} placeholder="URL Link (Optional e.g. https://...)" className="flex-1 border border-gray-300 rounded-lg p-2.5 text-sm font-bold outline-none focus:border-brand-purple" />
+                          <button onClick={async () => {
+                            if(!remTitle || !remDate) return alert('Enter a title and date!');
+                            const {error} = await supabase.from('calendar_events').insert([{ user_email: user.email, title: remTitle, event_date: remDate, link_url: remLink }]); 
+                            if(!error) { alert('Reminder sent!'); setRemTitle(''); setRemDate(''); setRemLink(''); fetchAdminData(); } else { alert(error.message) }
+                          }} className="bg-brand-purple text-white px-6 py-2.5 rounded-lg text-sm font-bold hover:bg-brand-darkPurple transition shadow-sm whitespace-nowrap shrink-0">Send Reminder &rarr;</button>
+                        </div>
                       </div>
                     </div>
 
@@ -229,7 +294,15 @@ export default function InstructorPortal() {
                       <input type="checkbox" checked={chapter.isSubChapter || false} onChange={(e) => { const n = [...chapters]; n[i].isSubChapter = e.target.checked; setChapters(n); }} className="w-4 h-4 accent-brand-purple cursor-pointer" /> Is Sub-Chapter
                     </label>
 
-                    <button onClick={() => removeChapter(chapter.id)} className="text-red-400 font-bold px-2 text-2xl hover:text-red-600">&times;</button></div><div className="ml-11"><textarea value={chapter.textContent || ""} onChange={(e) => { const n = [...chapters]; n[i].textContent = e.target.value; setChapters(n); }} placeholder={chapter.type === 'text' ? "Type your course content here..." : "Add context, instructions, or body text..."} className="w-full border border-gray-300 rounded-lg p-3 text-sm min-h-[100px] outline-none focus:border-brand-purple bg-white resize-y" /></div>{chapter.type === 'quiz' && (<div className="ml-11 bg-brand-lightYellow/10 p-5 rounded-lg border-2 border-brand-yellow/50"><div className="flex justify-between items-center mb-4"><h4 className="font-bold text-brand-darkPurple text-sm uppercase tracking-wider">📝 Questions</h4><button onClick={() => addQuizQuestion(i)} className="text-xs bg-brand-yellow text-brand-darkPurple px-3 py-1.5 rounded font-bold shadow-sm hover:bg-brand-lightYellow">+ Add Q</button></div>{chapter.questions?.map((q: any, qIndex: number) => (<div key={qIndex} className="bg-white p-4 border border-gray-200 rounded-lg relative shadow-sm mb-4"><button onClick={() => removeQuizQuestion(i, qIndex)} className="absolute -top-3 -right-3 bg-white text-red-500 border border-gray-200 rounded-full w-6 h-6 flex items-center justify-center font-bold shadow-sm">&times;</button><div className="flex gap-3 mb-3"><select value={q.qType || 'mcq'} onChange={(e) => updateQuizQuestion(i, qIndex, 'qType', e.target.value)} className="w-1/3 p-3 border border-gray-300 rounded outline-none font-bold text-sm"><option value="mcq">⭕ Multiple Choice</option><option value="short">✏️ Short Text</option><option value="long">📄 Long Text</option></select><input placeholder="Question prompt..." value={q.question} onChange={(e) => updateQuizQuestion(i, qIndex, 'question', e.target.value)} className="w-2/3 p-3 border border-gray-300 rounded outline-none font-bold text-sm" /></div>{(!q.qType || q.qType === 'mcq') && (<><div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">{[0, 1, 2, 3].map((oIdx) => (<input key={oIdx} placeholder={`Option ${oIdx + 1}`} value={q.options[oIdx] || ""} onChange={(e) => updateQuizOption(i, qIndex, oIdx, e.target.value)} className="p-2 border border-gray-300 rounded text-sm outline-none" />))}</div><select value={q.answer} onChange={(e) => updateQuizQuestion(i, qIndex, 'answer', e.target.value)} className="w-full p-2.5 border border-brand-purple/50 bg-brand-purple/5 rounded text-sm font-bold text-brand-darkPurple outline-none"><option value="">Select CORRECT answer...</option>{q.options.map((opt: string, oIndex: number) => opt && <option key={oIndex} value={opt}>{opt}</option>)}</select></>)}</div>))}</div>)}{chapter.type !== 'quiz' && chapter.type !== 'text' && (<div className="ml-11 flex items-center gap-4 bg-white p-4 rounded-lg border-2 border-dashed border-gray-300">{chapter.isUploading ? <span className="text-brand-purple font-bold text-sm animate-pulse">⏳ {chapter.uploadStatus || "Uploading..."}</span> : chapter.fileUrl ? <span className="text-brand-success font-bold text-sm truncate">✓ attached</span> : (<><span className="flex-1 text-sm text-gray-500 font-bold">Attach file:</span><label className="cursor-pointer bg-brand-purple/10 px-4 py-2 rounded-md text-sm font-bold text-brand-purple hover:bg-brand-purple/20 transition whitespace-nowrap">☁️ Choose File<input type="file" className="hidden" accept={chapter.type === 'scorm' ? '.zip' : undefined} onChange={(e) => handleFileUpload(i, e)} /></label></>)}</div>)}</div>))}</div></div></div><div className="space-y-6"><div className="bg-brand-darkPurple p-6 rounded-xl shadow-lg text-white sticky top-8 h-fit"><h2 className="text-lg font-bold mb-6 text-brand-yellow">Publish Course</h2>
+                    <button onClick={() => removeChapter(chapter.id)} className="text-red-400 font-bold px-2 text-2xl hover:text-red-600">&times;</button></div>
+                    
+                    {/* 🧠 THE NEW RICH TEXT EDITOR COMPONENT */}
+                    <div className="ml-11 mt-4">
+                      <span className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">📝 Module Content / Instructions</span>
+                      <RichEditor value={chapter.textContent || ""} onChange={(val) => { const n = [...chapters]; n[i].textContent = val; setChapters(n); }} />
+                    </div>
+
+                    {chapter.type === 'quiz' && (<div className="ml-11 bg-brand-lightYellow/10 p-5 rounded-lg border-2 border-brand-yellow/50 mt-4"><div className="flex justify-between items-center mb-4"><h4 className="font-bold text-brand-darkPurple text-sm uppercase tracking-wider">📝 Questions</h4><button onClick={() => addQuizQuestion(i)} className="text-xs bg-brand-yellow text-brand-darkPurple px-3 py-1.5 rounded font-bold shadow-sm hover:bg-brand-lightYellow">+ Add Q</button></div>{chapter.questions?.map((q: any, qIndex: number) => (<div key={qIndex} className="bg-white p-4 border border-gray-200 rounded-lg relative shadow-sm mb-4"><button onClick={() => removeQuizQuestion(i, qIndex)} className="absolute -top-3 -right-3 bg-white text-red-500 border border-gray-200 rounded-full w-6 h-6 flex items-center justify-center font-bold shadow-sm">&times;</button><div className="flex gap-3 mb-3"><select value={q.qType || 'mcq'} onChange={(e) => updateQuizQuestion(i, qIndex, 'qType', e.target.value)} className="w-1/3 p-3 border border-gray-300 rounded outline-none font-bold text-sm"><option value="mcq">⭕ Multiple Choice</option><option value="short">✏️ Short Text</option><option value="long">📄 Long Text</option></select><input placeholder="Question prompt..." value={q.question} onChange={(e) => updateQuizQuestion(i, qIndex, 'question', e.target.value)} className="w-2/3 p-3 border border-gray-300 rounded outline-none font-bold text-sm" /></div>{(!q.qType || q.qType === 'mcq') && (<><div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">{[0, 1, 2, 3].map((oIdx) => (<input key={oIdx} placeholder={`Option ${oIdx + 1}`} value={q.options[oIdx] || ""} onChange={(e) => updateQuizOption(i, qIndex, oIdx, e.target.value)} className="p-2 border border-gray-300 rounded text-sm outline-none" />))}</div><select value={q.answer} onChange={(e) => updateQuizQuestion(i, qIndex, 'answer', e.target.value)} className="w-full p-2.5 border border-brand-purple/50 bg-brand-purple/5 rounded text-sm font-bold text-brand-darkPurple outline-none"><option value="">Select CORRECT answer...</option>{q.options.map((opt: string, oIndex: number) => opt && <option key={oIndex} value={opt}>{opt}</option>)}</select></>)}</div>))}</div>)}{chapter.type !== 'quiz' && chapter.type !== 'text' && (<div className="ml-11 flex items-center gap-4 bg-white p-4 rounded-lg border-2 border-dashed border-gray-300 mt-4">{chapter.isUploading ? <span className="text-brand-purple font-bold text-sm animate-pulse">⏳ {chapter.uploadStatus || "Uploading..."}</span> : chapter.fileUrl ? <span className="text-brand-success font-bold text-sm truncate">✓ attached</span> : (<><span className="flex-1 text-sm text-gray-500 font-bold">Attach file:</span><label className="cursor-pointer bg-brand-purple/10 px-4 py-2 rounded-md text-sm font-bold text-brand-purple hover:bg-brand-purple/20 transition whitespace-nowrap">☁️ Choose File<input type="file" className="hidden" accept={chapter.type === 'scorm' ? '.zip' : undefined} onChange={(e) => handleFileUpload(i, e)} /></label></>)}</div>)}</div>))}</div></div></div><div className="space-y-6"><div className="bg-brand-darkPurple p-6 rounded-xl shadow-lg text-white sticky top-8 h-fit"><h2 className="text-lg font-bold mb-6 text-brand-yellow">Publish Course</h2>
         
         {/* 🧠 DYNAMIC SAVE BUTTON */}
         <button onClick={handleSaveCourse} disabled={isSaving || chapters.some(c => c.isUploading)} className="w-full bg-brand-yellow text-brand-darkPurple font-bold py-3.5 rounded-lg hover:bg-brand-lightYellow transition disabled:opacity-50">
@@ -241,7 +314,6 @@ export default function InstructorPortal() {
 
         </div><div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200"><h2 className="text-lg font-bold text-brand-purple mb-4 border-b border-gray-100 pb-4">🗑️ Live Courses</h2>{existingCourses.length === 0 ? <p className="text-gray-500 font-bold">No courses published.</p> : (<div className="space-y-2">{existingCourses.map(c => (<div key={c.id} className="flex flex-col xl:flex-row xl:items-center justify-between py-2 border-b border-gray-100 last:border-0 gap-2"><span className="text-sm font-bold text-brand-darkGrey truncate pr-4">{c.title}</span><div className="flex gap-2 shrink-0">
           
-          {/* ✅ THE BUTTON IS NOW SAFE TO USE! */}
           <button onClick={() => handleEditCourse(c)} className="bg-blue-50 text-blue-600 px-3 py-1 rounded text-xs font-bold hover:bg-blue-100 transition border border-blue-200">Edit</button>
           <button onClick={() => handleDeleteCourse(c.id, c.title)} className="bg-red-50 text-red-600 px-3 py-1 rounded text-xs font-bold hover:bg-red-100 transition border border-red-200">Delete</button>
 
